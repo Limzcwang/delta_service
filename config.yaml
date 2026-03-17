@@ -1,0 +1,355 @@
+# Delta Service 环境配置
+# 支持开发、测试、生产环境的差异化配置
+
+# 基础配置
+base:
+  app_name: "delta-service"
+  version: "1.0.0"
+  description: "Delta Service - 实时通信服务"
+  
+  # 日志配置
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+    max_size: 10485760  # 10MB
+    backup_count: 5
+    
+  # 服务配置
+  service:
+    http_port: 8000
+    websocket_port: 8765
+    host: "0.0.0.0"
+    
+  # 性能配置
+  performance:
+    heartbeat_interval: 30  # 心跳间隔（秒）
+    data_push_interval: 15  # 数据推送间隔（秒）
+    max_clients: 1000       # 最大客户端连接数
+
+# 开发环境配置
+development:
+  <<: *base
+  
+  # 环境标识
+  environment: "development"
+  
+  # 资源限制（开发环境较小）
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+    
+  # 部署配置
+  deployment:
+    replicas: 1
+    autoscaling:
+      enabled: false
+    
+  # 存储配置
+  storage:
+    logs:
+      size: "100Mi"
+      class: "standard"
+    
+  # 网络配置
+  network:
+    service_type: "NodePort"
+    ingress:
+      enabled: false
+    
+  # 监控配置
+  monitoring:
+    enabled: true
+    metrics:
+      - name: "http_requests_total"
+        type: "counter"
+      - name: "websocket_connections"
+        type: "gauge"
+
+# 测试环境配置
+test:
+  <<: *base
+  
+  # 环境标识
+  environment: "test"
+  
+  # 资源限制（测试环境中等）
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+    
+  # 部署配置
+  deployment:
+    replicas: 2
+    autoscaling:
+      enabled: true
+      min_replicas: 1
+      max_replicas: 3
+      target_cpu: 80
+    
+  # 存储配置
+  storage:
+    logs:
+      size: "1Gi"
+      class: "standard"
+    
+  # 网络配置
+  network:
+    service_type: "LoadBalancer"
+    ingress:
+      enabled: true
+    
+  # 监控配置
+  monitoring:
+    enabled: true
+    metrics:
+      - name: "http_requests_total"
+        type: "counter"
+      - name: "websocket_connections"
+        type: "gauge"
+      - name: "response_time"
+        type: "histogram"
+
+# 生产环境配置
+production:
+  <<: *base
+  
+  # 环境标识
+  environment: "production"
+  
+  # 资源限制（生产环境较大）
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+    
+  # 部署配置
+  deployment:
+    replicas: 3
+    autoscaling:
+      enabled: true
+      min_replicas: 2
+      max_replicas: 5
+      target_cpu: 75
+    
+  # 存储配置
+  storage:
+    logs:
+      size: "5Gi"
+      class: "premium"
+    
+  # 网络配置
+  network:
+    service_type: "LoadBalancer"
+    ingress:
+      enabled: true
+      tls:
+        enabled: true
+        secret_name: "delta-service-tls"
+    
+  # 监控配置
+  monitoring:
+    enabled: true
+    metrics:
+      - name: "http_requests_total"
+        type: "counter"
+      - name: "websocket_connections"
+        type: "gauge"
+      - name: "response_time"
+        type: "histogram"
+      - name: "error_rate"
+        type: "gauge"
+    
+  # 安全配置
+  security:
+    network_policy:
+      enabled: true
+      allowed_cidrs:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+    
+  # 高可用配置
+  high_availability:
+    pod_anti_affinity: true
+    spread_constraints:
+      - topology_key: "kubernetes.io/hostname"
+        max_skew: 1
+
+# 环境变量映射
+env_vars:
+  # 通用环境变量
+  common:
+    PYTHONUNBUFFERED: "1"
+    PYTHONPATH: "/app"
+    
+  # 环境特定变量
+  development:
+    LOG_LEVEL: "DEBUG"
+    DEBUG: "true"
+    
+  test:
+    LOG_LEVEL: "INFO"
+    DEBUG: "false"
+    
+  production:
+    LOG_LEVEL: "WARNING"
+    DEBUG: "false"
+
+# 镜像配置
+images:
+  # 镜像仓库配置
+  registry:
+    url: "your-registry.com"
+    namespace: "delta-service"
+    
+  # 镜像标签策略
+  tags:
+    latest: "latest"
+    development: "dev-{{.CommitHash}}"
+    test: "test-{{.BuildNumber}}"
+    production: "v{{.Version}}"
+
+# 部署策略
+deployment_strategies:
+  development:
+    type: "Recreate"
+    rolling_update:
+      max_unavailable: 1
+      max_surge: 1
+    
+  test:
+    type: "RollingUpdate"
+    rolling_update:
+      max_unavailable: 0
+      max_surge: 1
+    
+  production:
+    type: "RollingUpdate"
+    rolling_update:
+      max_unavailable: 0
+      max_surge: 1
+    health_check:
+      initial_delay: 60
+      period: 10
+      timeout: 5
+      success_threshold: 1
+      failure_threshold: 3
+
+# 命名空间配置
+namespaces:
+  development: "delta-dev"
+  test: "delta-test"
+  production: "delta-prod"
+
+# 服务发现配置
+discovery:
+  # 服务标签
+  labels:
+    app: "delta-service"
+    version: "{{.Version}}"
+    environment: "{{.Environment}}"
+    
+  # 服务注解
+  annotations:
+    description: "Delta Service - {{.Environment}}环境"
+    maintainer: "Delta Service Team"
+
+# 健康检查配置
+health_checks:
+  liveness:
+    path: "/docs"
+    port: 8000
+    initial_delay: 30
+    period: 10
+    timeout: 5
+    success_threshold: 1
+    failure_threshold: 3
+    
+  readiness:
+    path: "/docs"
+    port: 8000
+    initial_delay: 5
+    period: 5
+    timeout: 3
+    success_threshold: 1
+    failure_threshold: 3
+
+# 网络策略
+network_policies:
+  # 入站规则
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: "0.0.0.0/0"
+      ports:
+        - protocol: "TCP"
+          port: 80
+        - protocol: "TCP"
+          port: 8765
+    
+  # 出站规则
+  egress:
+    - to:
+        - ipBlock:
+            cidr: "0.0.0.0/0"
+      ports:
+        - protocol: "TCP"
+          port: 53
+        - protocol: "UDP"
+          port: 53
+
+# 监控和告警
+alerting:
+  # 告警规则
+  rules:
+    - alert: "DeltaServiceDown"
+      expr: "up{job='delta-service'} == 0"
+      for: "1m"
+      labels:
+        severity: "critical"
+      annotations:
+        summary: "Delta Service is down"
+        description: "Delta Service has been down for more than 1 minute."
+        
+    - alert: "HighErrorRate"
+      expr: "rate(http_requests_total{status=~'5..'}[5m]) / rate(http_requests_total[5m]) > 0.05"
+      for: "5m"
+      labels:
+        severity: "warning"
+      annotations:
+        summary: "High error rate detected"
+        description: "Error rate is above 5% for the last 5 minutes."
+        
+    - alert: "HighConnectionCount"
+      expr: "websocket_connections > 500"
+      for: "2m"
+      labels:
+        severity: "warning"
+      annotations:
+        summary: "High WebSocket connection count"
+        description: "WebSocket connection count is above 500."
+
+# 备份配置
+backup:
+  # 日志备份
+  logs:
+    enabled: true
+    schedule: "0 2 * * *"  # 每天凌晨2点
+    retention: 30          # 保留30天
+    
+  # 配置备份
+  config:
+    enabled: true
+    schedule: "0 0 * * 0"   # 每周日凌晨
+    retention: 90          # 保留90天
