@@ -1,0 +1,173 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Build Docker image
+      run: |
+        docker build -t delta-service .
+
+    - name: Test Docker image
+      run: |
+        # 测试镜像是否能正常启动
+        docker run -d --name test-container -p 18000:8000 delta-service
+        sleep 10
+        
+        # 检查服务是否正常响应
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18000/docs || echo "000")
+        if [ "$HTTP_STATUS" != "200" ]; then
+          echo "❌ 镜像测试失败，HTTP状态码: $HTTP_STATUS"
+          docker logs test-container
+          exit 1
+        fi
+        
+        echo "✅ 镜像测试通过"
+        docker stop test-container
+        docker rm test-container
+
+    - name: Save Docker image
+      run: |
+        docker save delta-service -o delta-service.tar
+
+    - name: Deploy to server
+      env:
+        SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        SERVER_USER: ${{ secrets.SERVER_USER }}
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      run: |
+        set -e
+        
+        echo "🔑 配置SSH连接..."
+        mkdir -p ~/.ssh
+        echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        
+        ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+        
+        echo "🚀 开始部署到服务器 $SERVER_HOST:$SERVER_PORT..."
+        
+        echo "📦 传输Docker镜像到服务器..."
+        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$SERVER_PORT" delta-service.tar "$SERVER_USER@$SERVER_HOST:/tmp/delta-service.tar"
+        
+        echo "🔧 在服务器上执行部署..."
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'bash -s' << 'EOF'
+set -e
+
+echo "📋 检查服务器环境..."
+
+if ! command -v docker &> /dev/null; then
+  echo "❌ Docker未安装，请先在服务器上安装Docker"
+  exit 1
+fi
+
+if ! systemctl is-active --quiet docker; then
+  echo "⚠️ Docker服务未运行，尝试启动..."
+  sudo systemctl start docker || {
+    echo "❌ 无法启动Docker服务"
+    exit 1
+  }
+fi
+
+echo "✅ 服务器环境检查通过"
+
+echo "🧹 清理旧容器..."
+docker stop delta-service-container 2>/dev/null || true
+docker rm delta-service-container 2>/dev/null || true
+
+echo "🗑️ 清理旧镜像..."
+docker rmi delta-service 2>/dev/null || true
+
+echo "📥 加载Docker镜像..."
+docker load -i /tmp/delta-service.tar
+
+echo "🚀 启动新容器..."
+docker run -d \\
+  --name delta-service-container \\
+  -p 8000:8000 \\
+  -p 8765:8765 \\
+  --restart unless-stopped \\
+  delta-service
+
+rm -f /tmp/delta-service.tar
+
+echo "⏳ 等待服务启动..."
+sleep 15
+
+echo "🔍 执行健康检查..."
+
+CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' delta-service-container 2>/dev/null || echo "unknown")
+if [ "$CONTAINER_STATUS" != "running" ]; then
+  echo "❌ 容器状态异常: $CONTAINER_STATUS"
+  docker logs delta-service-container
+  exit 1
+fi
+
+echo "✅ 容器运行正常"
+
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs || echo "000")
+if [ "$HTTP_STATUS" = "200" ]; then
+  echo "✅ HTTP API服务正常"
+else
+  echo "❌ HTTP API服务异常 (状态码: $HTTP_STATUS)"
+  docker logs delta-service-container
+  exit 1
+fi
+
+if command -v nc &> /dev/null && nc -z localhost 8765 &>/dev/null; then
+  echo "✅ WebSocket服务正常"
+else
+  echo "⚠️ WebSocket端口检查失败"
+fi
+
+echo "🎉 部署成功完成！"
+echo ""
+echo "📊 服务信息:"
+echo "- HTTP API文档: http://$SERVER_HOST:8000/docs"
+echo "- WebSocket服务: ws://$SERVER_HOST:8765"
+echo "- 容器名称: delta-service-container"
+echo ""
+echo "🔧 管理命令:"
+echo "- 查看日志: docker logs delta-service-container"
+echo "- 停止服务: docker stop delta-service-container"
+echo "- 重启服务: docker restart delta-service-container"
+EOF
+
+echo "✅ 部署流程完成"
+
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "🧹 清理临时文件..."
+        rm -f delta-service.tar
+        rm -f ~/.ssh/id_rsa
+        
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "🎉 部署成功！服务已更新到最新版本"
+        else
+          echo "❌ 部署失败，请检查日志详情"
+        fi
