@@ -175,7 +175,7 @@ async def run_api_server():
         
         config = uvicorn.Config(
             app=app,
-            host="localhost",
+            host="0.0.0.0",
             port=8000,
             log_level="info"
         )
