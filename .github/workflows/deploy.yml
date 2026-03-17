@@ -7,7 +7,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     
     steps:
     - name: Checkout code
@@ -32,7 +32,7 @@ jobs:
       run: |
         # 测试镜像是否能正常启动
         docker run -d --name test-container -p 18000:8000 delta-service
-        sleep 30
+        sleep 20
         
         # 检查服务是否正常响应
         HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18000/docs || echo "000")
