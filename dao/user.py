@@ -55,6 +55,11 @@ class UserDao:
         """登录"""
         return await User.filter(username=username, password=password, deleted=False).first()
 
+    @staticmethod
+    async def list_users(skip: int = 0, limit: int = 100) -> list[User]:
+        """获取用户列表"""
+        return await User.filter(deleted=False).offset(skip).limit(limit).all()
+
 
 # Pydantic模型用于API序列化
 User_Pydantic = pydantic_model_creator(User, name="User")
