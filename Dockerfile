@@ -12,6 +12,9 @@ RUN echo "配置国内镜像源和网络优化..." && \
     pip config set global.timeout 120 && \
     pip config set global.retries 5
 
+# 安装curl工具用于健康检查
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
 # 复制依赖文件
 COPY requirements.txt .
 
