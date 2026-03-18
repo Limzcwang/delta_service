@@ -5,6 +5,9 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   deploy:
     runs-on: self-hosted
@@ -28,10 +31,13 @@ jobs:
         
         echo "✅ Docker环境正常"
 
-    - name: Build Docker image
+    - name: Build Docker image with optimization
       run: |
-        echo "🏗️ 构建Docker镜像..."
-        docker build -t delta-service .
+        echo "🏗️ 使用优化脚本构建Docker镜像..."
+        # 给脚本添加执行权限
+        chmod +x docker-build-optimize.sh
+        # 运行优化构建脚本
+        ./docker-build-optimize.sh
         echo "✅ 镜像构建完成"
 
     - name: Test Docker image
