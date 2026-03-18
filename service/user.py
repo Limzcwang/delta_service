@@ -10,18 +10,6 @@ class UserService:
     """用户服务层"""
 
     @staticmethod
-    def _hash_password(password: str) -> str:
-        """简单的密码哈希处理
-        
-        Args:
-            password: 明文密码
-            
-        Returns:
-            哈希后的密码
-        """
-        return hashlib.md5(password.encode()).hexdigest()
-
-    @staticmethod
     async def create_user(username: str, password: Optional[str] = None) -> dict:
         """创建用户
         
