@@ -1,15 +1,15 @@
 import asyncio
 import json
-import uvicorn
 from datetime import datetime
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+
+import uvicorn
+import websockets
+from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from log.logger import logger, log_exception
-import websockets
-
 from api.init import create_app
+from config.database import init_database, close_database
+from log.logger import logger, log_exception
 
 CONNECTED_CLIENTS = set()
 
@@ -23,7 +23,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         "method": request.method,
         "client_ip": request.client.host if request.client else "unknown"
     })
-    
+
     # 返回标准化的错误响应
     return JSONResponse(
         status_code=500,
@@ -172,7 +172,7 @@ async def run_api_server():
         # 创建应用并添加全局异常处理
         app = create_app()
         app.add_exception_handler(Exception, global_exception_handler)
-        
+
         config = uvicorn.Config(
             app=app,
             host="0.0.0.0",
@@ -187,11 +187,35 @@ async def run_api_server():
         raise
 
 
+async def init_services():
+    """初始化所有服务"""
+    try:
+        logger.info("正在初始化数据库连接...")
+        await init_database()
+        logger.info("数据库初始化完成")
+    except Exception as e:
+        log_exception(e, "服务初始化失败")
+        raise
+
+
+async def cleanup_services():
+    """清理服务资源"""
+    try:
+        logger.info("正在关闭数据库连接...")
+        await close_database()
+        logger.info("数据库连接已关闭")
+    except Exception as e:
+        log_exception(e, "服务清理失败")
+
+
 async def main():
     """同时运行WebSocket和HTTP API服务"""
     try:
         logger.info("Delta Service 启动中...")
-        
+
+        # 初始化服务
+        await init_services()
+
         # 同时启动两个服务
         await asyncio.gather(
             run_websocket_server(),
@@ -202,6 +226,7 @@ async def main():
         log_exception(e, "Delta Service 启动失败")
         raise
     finally:
+        await cleanup_services()
         logger.info("Delta Service 停止")
 
 
