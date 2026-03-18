@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.room import router as room_router
+from api.user import router as user_router
 
 
 def create_app():
@@ -23,6 +24,7 @@ def create_app():
     
     # 注册路由
     app.include_router(room_router)
+    app.include_router(user_router)
     
     # 健康检查端点
     @app.get("/health")
