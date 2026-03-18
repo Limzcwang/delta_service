@@ -18,7 +18,7 @@ DATABASE_CONFIG = {
     },
     "apps": {
         "models": {
-            "models": ["dao.user", "aerich.models"],
+            "models": ["dao.user"],
             "default_connection": "default",
         }
     },
