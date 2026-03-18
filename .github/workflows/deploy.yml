@@ -13,26 +13,37 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Cache Docker layers
-      uses: actions/cache@v3
-      with:
-        path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-buildx-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-buildx-
+    - name: Check Docker environment
+      run: |
+        echo "🔍 检查Docker环境..."
+        if ! command -v docker &> /dev/null; then
+          echo "❌ Docker未安装"
+          exit 1
+        fi
+        
+        if ! systemctl is-active --quiet docker; then
+          echo "🚀 启动Docker服务..."
+          sudo systemctl start docker || exit 1
+        fi
+        
+        echo "✅ Docker环境正常"
 
     - name: Build Docker image
       run: |
+        echo "🏗️ 构建Docker镜像..."
         docker build -t delta-service .
+        echo "✅ 镜像构建完成"
 
     - name: Test Docker image
       run: |
-        # 测试镜像是否能正常启动
+        echo "🧪 测试镜像启动..."
+        # 清理可能存在的测试容器
+        docker stop test-container 2>/dev/null || true
+        docker rm test-container 2>/dev/null || true
+        
+        # 启动测试容器
         docker run -d --name test-container -p 18000:8000 delta-service
-        sleep 20
+        sleep 15
         
         # 检查服务是否正常响应
         HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18000/docs || echo "000")
@@ -46,50 +57,16 @@ jobs:
         docker stop test-container
         docker rm test-container
 
-    - name: Save Docker image
+    - name: Deploy application
       run: |
-        docker save delta-service -o delta-service.tar
-
-    - name: Deploy to server
-      env:
-        SERVER_HOST: ${{ secrets.SERVER_HOST }}
-        SERVER_PORT: ${{ secrets.SERVER_PORT }}
-        SERVER_USER: ${{ secrets.SERVER_USER }}
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      run: |
-        set -e
+        echo "🚀 开始部署应用..."
         
-        echo "🔑 配置SSH连接..."
-        mkdir -p ~/.ssh
-        echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        
-        ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-        
-        # 上传镜像
-        scp -o StrictHostKeyChecking=no -P "$SERVER_PORT" delta-service.tar "$SERVER_USER@$SERVER_HOST:/tmp/"
-        
-        # 远程执行脚本（注意这里的缩进和引号）
-        ssh -o StrictHostKeyChecking=no -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "bash -s" << 'REMOTE_SCRIPT'
-        set -e
-        
-        # 检查 Docker
-        if ! command -v docker &> /dev/null; then
-          echo "Docker未安装"
-          exit 1
-        fi
-        
-        if ! systemctl is-active --quiet docker; then
-          sudo systemctl start docker || exit 1
-        fi
-        
-        # 清理旧容器
+        # 停止并清理旧容器
         docker stop delta-service-container 2>/dev/null || true
         docker rm delta-service-container 2>/dev/null || true
         docker rmi delta-service 2>/dev/null || true
         
-        # 加载并运行新镜像
-        docker load -i /tmp/delta-service.tar
+        # 运行新容器
         docker run -d \
           --name delta-service-container \
           -p 8000:8000 \
@@ -97,35 +74,25 @@ jobs:
           --restart unless-stopped \
           delta-service
         
-        # 清理临时文件
-        rm -f /tmp/delta-service.tar
+        echo "⏳ 等待服务启动..."
+        sleep 25
         
         # 健康检查
-        sleep 15
-        
         CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' delta-service-container 2>/dev/null || echo "unknown")
         if [ "$CONTAINER_STATUS" != "running" ]; then
-          echo "容器未正常运行"
+          echo "❌ 容器未正常运行"
           docker logs delta-service-container
           exit 1
         fi
         
         HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs || echo "000")
         if [ "$HTTP_STATUS" != "200" ]; then
-          echo "健康检查失败，状态码: $HTTP_STATUS"
+          echo "❌ 健康检查失败，状态码: $HTTP_STATUS"
           docker logs delta-service-container
           exit 1
         fi
         
-        echo "部署成功"
-        REMOTE_SCRIPT
-
-    - name: Cleanup
-      if: always()
-      run: |
-        echo "🧹 清理临时文件..."
-        rm -f delta-service.tar
-        rm -f ~/.ssh/id_rsa
+        echo "✅ 部署成功！服务运行正常"
 
     - name: Notify deployment status
       if: always()
