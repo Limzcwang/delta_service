@@ -97,6 +97,12 @@ jobs:
           -p 8000:8000 \
           -p 8765:8765 \
           --restart unless-stopped \
+          --network host \
+          -e DB_HOST=mysql8 \
+          -e DB_PORT=3306 \
+          -e DB_USER=root \
+          -e DB_PASSWORD=***REMOVED*** \
+          -e DB_NAME=delta_service \
           delta-service
         
         echo "⏳ 等待服务启动..."
