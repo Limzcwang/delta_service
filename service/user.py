@@ -1,5 +1,5 @@
 from typing import Optional, List
-from dao.user import UserDao, User, User_Pydantic, UserIn_Pydantic
+from dao.user import UserDao, User_Pydantic, UserIn_Pydantic
 import hashlib
 import logging
 
@@ -189,7 +189,7 @@ class UserService:
         """
         try:
             # 获取未删除的用户列表
-            users = await User.filter(deleted=False).offset(skip).limit(limit).all()
+            users = await UserDao.list_users(skip, limit)
             users_data = [await User_Pydantic.from_tortoise_orm(user) for user in users]
             
             return {
