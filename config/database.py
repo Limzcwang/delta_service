@@ -7,7 +7,7 @@ DATABASE_CONFIG = {
         "default": {
             "engine": "tortoise.backends.mysql",
             "credentials": {
-                "host": "mysql8",
+                "host": "114.132.161.169",
                 "port": 3306,
                 "user": "root",
                 "password": "Lim@241669",
