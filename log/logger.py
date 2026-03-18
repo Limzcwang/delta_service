@@ -1,7 +1,9 @@
 import logging
 import os
+import time
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
+from typing import Dict, Any, Optional, Any
 
 # 获取项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -116,3 +118,164 @@ def log_performance(operation: str, duration: float, size: int = None, user_id: 
     size_str = f" - 大小:{size}" if size is not None else ""
     user_str = f" - 用户:{user_id}" if user_id else ""
     logger.info(f"性能监控 - {operation} - 耗时:{duration:.3f}s{size_str}{user_str}")
+
+# SQL执行日志函数
+def log_sql_execution(sql: str, params: Any = None, duration: float = None, success: bool = True, error: str = ""):
+    """记录SQL执行日志
+    
+    Args:
+        sql: SQL语句
+        params: 参数
+        duration: 执行耗时（秒）
+        success: 是否成功
+        error: 错误信息
+    """
+    status = "成功" if success else "失败"
+    duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
+    params_str = f" - 参数:{params}" if params else ""
+    error_str = f" - 错误:{error}" if error else ""
+    
+    # 简化SQL显示，避免日志过长
+    sql_short = sql[:100] + "..." if len(sql) > 100 else sql
+    
+    logger.info(f"SQL执行 - {status} - {sql_short}{params_str}{duration_str}{error_str}")
+
+# API响应日志函数
+def log_api_response(method: str, path: str, status_code: int, response_size: int = None, duration: float = None):
+    """记录API响应日志
+    
+    Args:
+        method: HTTP方法
+        path: 请求路径
+        status_code: 状态码
+        response_size: 响应大小（字节）
+        duration: 请求耗时（秒）
+    """
+    size_str = f" - 响应大小:{response_size}字节" if response_size is not None else ""
+    duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
+    
+    logger.info(f"API响应 - {method} {path} - 状态:{status_code}{size_str}{duration_str}")
+
+# 全局系统日志函数
+def log_system_event(event_type: str, component: str = "", details: str = "", level: str = "INFO"):
+    """记录系统事件日志
+    
+    Args:
+        event_type: 事件类型（startup, shutdown, config_change等）
+        component: 组件名称
+        details: 详细信息
+        level: 日志级别（INFO, WARNING, ERROR）
+    """
+    component_str = f" - 组件:{component}" if component else ""
+    details_str = f" - {details}" if details else ""
+    
+    log_method = getattr(logger, level.lower(), logger.info)
+    log_method(f"系统事件 - {event_type}{component_str}{details_str}")
+
+# 数据库连接日志函数
+def log_database_connection(event: str, database: str = "", details: str = "", success: bool = True):
+    """记录数据库连接日志
+    
+    Args:
+        event: 事件类型（connect, disconnect, reconnect等）
+        database: 数据库名称
+        details: 详细信息
+        success: 是否成功
+    """
+    status = "成功" if success else "失败"
+    db_str = f" - 数据库:{database}" if database else ""
+    details_str = f" - {details}" if details else ""
+    
+    level = "INFO" if success else "ERROR"
+    log_method = getattr(logger, level.lower(), logger.info)
+    log_method(f"数据库连接 - {event} - {status}{db_str}{details_str}")
+
+# 请求追踪上下文类
+class RequestContext:
+    """请求追踪上下文，用于记录请求的完整生命周期"""
+    
+    def __init__(self, request_id: str = None):
+        self.request_id = request_id or f"req_{int(time.time() * 1000)}"
+        self.start_time = time.time()
+        self.steps = []
+    
+    def add_step(self, step_name: str, details: str = ""):
+        """添加处理步骤"""
+        step_time = time.time() - self.start_time
+        self.steps.append({
+            "step": step_name,
+            "time": step_time,
+            "details": details
+        })
+    
+    def log_completion(self, success: bool = True, final_details: str = ""):
+        """记录请求完成日志"""
+        total_time = time.time() - self.start_time
+        status = "成功" if success else "失败"
+        
+        steps_str = "; ".join([f"{s['step']}({s['time']:.3f}s)" for s in self.steps])
+        
+        logger.info(f"请求追踪 - {self.request_id} - {status} - 总耗时:{total_time:.3f}s - 步骤:[{steps_str}] - {final_details}")
+
+# 全局日志管理器类
+class GlobalLogger:
+    """全局日志管理器，提供统一的日志接口"""
+    
+    @staticmethod
+    def startup():
+        """记录系统启动日志"""
+        log_system_event("startup", "system", "Delta Service 启动", "INFO")
+    
+    @staticmethod
+    def shutdown():
+        """记录系统关闭日志"""
+        log_system_event("shutdown", "system", "Delta Service 关闭", "INFO")
+    
+    @staticmethod
+    def api_call(method: str, path: str, client_ip: str = ""):
+        """记录API调用开始"""
+        log_api_request(method, path, None, client_ip)
+        return RequestContext()
+    
+    @staticmethod
+    def api_response(context: RequestContext, method: str, path: str, status_code: int, response_size: int = None):
+        """记录API响应完成"""
+        duration = time.time() - context.start_time
+        log_api_response(method, path, status_code, response_size, duration)
+        context.log_completion(status_code < 400, f"状态码:{status_code}")
+    
+    @staticmethod
+    def sql_query(sql: str, params: Any = None):
+        """记录SQL查询开始"""
+        start_time = time.time()
+        return {
+            "sql": sql,
+            "params": params,
+            "start_time": start_time
+        }
+    
+    @staticmethod
+    def sql_result(context: dict, success: bool = True, error: str = ""):
+        """记录SQL查询结果"""
+        duration = time.time() - context["start_time"]
+        log_sql_execution(context["sql"], context["params"], duration, success, error)
+    
+    @staticmethod
+    def websocket_connect(client_id: str, client_count: int):
+        """记录WebSocket连接"""
+        log_websocket_event("connect", client_count, client_id)
+    
+    @staticmethod
+    def websocket_disconnect(client_id: str, client_count: int):
+        """记录WebSocket断开"""
+        log_websocket_event("disconnect", client_count, client_id)
+    
+    @staticmethod
+    def database_connect(database: str, success: bool = True, details: str = ""):
+        """记录数据库连接"""
+        log_database_connection("connect", database, details, success)
+    
+    @staticmethod
+    def database_disconnect(database: str, success: bool = True, details: str = ""):
+        """记录数据库断开"""
+        log_database_connection("disconnect", database, details, success)

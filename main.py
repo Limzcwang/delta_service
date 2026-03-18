@@ -9,9 +9,15 @@ from fastapi.responses import JSONResponse
 
 from api.init import create_app
 from config.database import init_database, close_database
-from log.logger import logger, log_exception
-
-CONNECTED_CLIENTS = set()
+from log.logger import logger, log_exception, GlobalLogger
+from log.api_logger import APILoggingMiddleware
+from log.sql_logger import init_sql_logging
+from service.user import UserService
+from websocket import (
+    data_pusher,
+    inactive_user_checker,
+    run_websocket_server
+)
 
 
 # 全局异常处理器
@@ -33,137 +39,6 @@ async def global_exception_handler(request: Request, exc: Exception):
             "detail": str(exc)
         }
     )
-
-
-async def register(websocket):
-    CONNECTED_CLIENTS.add(websocket)
-    logger.info(f"客户端连接，当前在线: {len(CONNECTED_CLIENTS)}")
-    await websocket.send(json.dumps({
-        "type": "system",
-        "message": "连接成功",
-        "clients_count": len(CONNECTED_CLIENTS)
-    }))
-
-
-async def unregister(websocket):
-    CONNECTED_CLIENTS.discard(websocket)
-    logger.info(f"客户端断开，当前在线: {len(CONNECTED_CLIENTS)}")
-
-
-async def broadcast(message):
-    if CONNECTED_CLIENTS:
-        websockets.broadcast(CONNECTED_CLIENTS, message)
-
-
-async def send_heartbeat(websocket):
-    try:
-        while True:
-            await asyncio.sleep(30)
-            await websocket.send(json.dumps({
-                "type": "heartbeat",
-                "time": datetime.now().isoformat()
-            }))
-    except websockets.exceptions.ConnectionClosed:
-        pass
-
-
-async def handle_client(websocket):
-    await register(websocket)
-    heartbeat_task = asyncio.create_task(send_heartbeat(websocket))
-
-    try:
-        async for message in websocket:
-            logger.info(f"收到消息: {message}")
-
-            try:
-                data = json.loads(message)
-
-                if data.get("type") == "echo":
-                    await websocket.send(json.dumps({
-                        "type": "echo",
-                        "received": data.get("content"),
-                        "time": datetime.now().isoformat()
-                    }))
-
-                elif data.get("type") == "broadcast":
-                    await broadcast(json.dumps({
-                        "type": "broadcast",
-                        "from": str(id(websocket))[-6:],
-                        "content": data.get("content"),
-                        "time": datetime.now().isoformat()
-                    }))
-
-                elif data.get("type") == "ping":
-                    await websocket.send(json.dumps({"type": "pong"}))
-
-                else:
-                    await websocket.send(json.dumps({
-                        "type": "ack",
-                        "message": "消息已收到",
-                        "your_data": data
-                    }))
-
-            except json.JSONDecodeError as e:
-                logger.error(f"WebSocket消息JSON解析失败: {message}")
-                await websocket.send(json.dumps({
-                    "type": "error",
-                    "message": "无效的JSON格式",
-                    "error_code": "INVALID_JSON"
-                }))
-            except Exception as e:
-                log_exception(e, "WebSocket消息处理失败", {"message": message})
-                await websocket.send(json.dumps({
-                    "type": "error",
-                    "message": "消息处理失败",
-                    "error_code": "MESSAGE_PROCESSING_ERROR"
-                }))
-
-    except websockets.exceptions.ConnectionClosed as e:
-        logger.info(f"连接关闭: {e}")
-    except Exception as e:
-        log_exception(e, "WebSocket客户端处理异常")
-    finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        await unregister(websocket)
-
-
-async def data_pusher():
-    counter = 0
-    while True:
-        await asyncio.sleep(15)
-        if CONNECTED_CLIENTS:
-            counter += 1
-            try:
-                await broadcast(json.dumps({
-                    "type": "push",
-                    "data_id": counter,
-                    "value": round(20 + 10 * (counter % 10), 2),
-                    "timestamp": datetime.now().isoformat()
-                }))
-                logger.info(f"推送数据 #{counter}")
-            except Exception as e:
-                log_exception(e, "数据推送失败", {"counter": counter})
-
-
-async def run_websocket_server():
-    """运行WebSocket服务器"""
-    try:
-        async with websockets.serve(
-                handle_client,
-                "localhost",
-                8765,
-                ping_interval=20,
-                ping_timeout=10
-        ):
-            logger.info("WebSocket 服务启动: ws://localhost:8765")
-            await asyncio.Future()  # 运行直到被取消
-    except Exception as e:
-        log_exception(e, "WebSocket服务器启动失败")
-        raise
 
 
 async def run_api_server():
@@ -190,7 +65,18 @@ async def run_api_server():
 async def init_services():
     """初始化所有服务"""
     try:
-        logger.info("服务初始化完成（数据库连接由FastAPI中间件管理）")
+        # 记录系统初始化开始
+        GlobalLogger.startup()
+        
+        # 初始化数据库连接
+        await init_database()
+        GlobalLogger.database_connect("delta_service", True, "数据库连接初始化成功")
+        
+        # 初始化SQL日志记录
+        await init_sql_logging()
+        logger.info("SQL日志记录初始化完成")
+        
+        logger.info("所有服务初始化完成")
     except Exception as e:
         log_exception(e, "服务初始化失败")
         raise
@@ -199,7 +85,14 @@ async def init_services():
 async def cleanup_services():
     """清理服务资源"""
     try:
-        logger.info("服务资源清理完成（数据库连接由FastAPI中间件管理）")
+        # 关闭数据库连接
+        await close_database()
+        GlobalLogger.database_disconnect("delta_service", True, "数据库连接正常关闭")
+        
+        # 记录系统关闭
+        GlobalLogger.shutdown()
+        
+        logger.info("服务资源清理完成")
     except Exception as e:
         log_exception(e, "服务清理失败")
 
@@ -212,11 +105,12 @@ async def main():
         # 初始化服务
         await init_services()
 
-        # 同时启动两个服务
+        # 同时启动多个服务
         await asyncio.gather(
             run_websocket_server(),
             run_api_server(),
-            data_pusher()
+            data_pusher(),
+            inactive_user_checker()
         )
     except Exception as e:
         log_exception(e, "Delta Service 启动失败")
