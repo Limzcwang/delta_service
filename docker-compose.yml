@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # MySQL数据库服务
+  mysql8:
+    image: mysql:8.0
+    container_name: delta-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: Lim@241669
+      MYSQL_DATABASE: delta_service
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - delta-network
+
+  # 主应用服务
+  app:
+    build: .
+    container_name: delta-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8765:8765"
+    environment:
+      DB_HOST: mysql8
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: Lim@241669
+      DB_NAME: delta_service
+    depends_on:
+      - mysql8
+    networks:
+      - delta-network
+
+volumes:
+  mysql_data:
+
+networks:
+  delta-network:
+    driver: bridge
