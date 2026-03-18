@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from tortoise.contrib.fastapi import register_tortoise
 
 from api.room import router as room_router
 from api.user import router as user_router
+from config.database import DATABASE_CONFIG
 
 
 def create_app():
@@ -20,6 +22,14 @@ def create_app():
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    
+    # 注册Tortoise ORM
+    register_tortoise(
+        app,
+        config=DATABASE_CONFIG,
+        generate_schemas=False,  # 已经在init_database中生成
+        add_exception_handlers=True,
     )
     
     # 注册路由

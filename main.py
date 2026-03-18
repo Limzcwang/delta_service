@@ -190,9 +190,7 @@ async def run_api_server():
 async def init_services():
     """初始化所有服务"""
     try:
-        logger.info("正在初始化数据库连接...")
-        await init_database()
-        logger.info("数据库初始化完成")
+        logger.info("服务初始化完成（数据库连接由FastAPI中间件管理）")
     except Exception as e:
         log_exception(e, "服务初始化失败")
         raise
@@ -201,9 +199,7 @@ async def init_services():
 async def cleanup_services():
     """清理服务资源"""
     try:
-        logger.info("正在关闭数据库连接...")
-        await close_database()
-        logger.info("数据库连接已关闭")
+        logger.info("服务资源清理完成（数据库连接由FastAPI中间件管理）")
     except Exception as e:
         log_exception(e, "服务清理失败")
 
