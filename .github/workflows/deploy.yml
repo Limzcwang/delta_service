@@ -67,12 +67,31 @@ jobs:
       run: |
         echo "🚀 开始部署应用..."
         
+        # 验证本地镜像是否存在且可用
+        echo "🔍 检查本地镜像状态..."
+        if docker image inspect delta-service &> /dev/null; then
+          echo "✅ 本地镜像delta-service存在"
+          # 验证镜像是否可运行
+          if docker run --rm delta-service echo "镜像验证成功" &> /dev/null; then
+            echo "✅ 镜像验证通过，可以正常运行"
+          else
+            echo "⚠️ 镜像验证失败，需要重新构建"
+            chmod +x docker-build-optimize.sh
+            ./docker-build-optimize.sh
+          fi
+        else
+          echo "❌ 本地镜像delta-service不存在，需要重新构建"
+          chmod +x docker-build-optimize.sh
+          ./docker-build-optimize.sh
+        fi
+        
         # 停止并清理旧容器
+        echo "🔄 清理旧容器..."
         docker stop delta-service-container 2>/dev/null || true
         docker rm delta-service-container 2>/dev/null || true
-        docker rmi delta-service 2>/dev/null || true
         
-        # 运行新容器
+        # 运行新容器（使用本地构建的镜像）
+        echo "🐳 启动新容器..."
         docker run -d \
           --name delta-service-container \
           -p 8000:8000 \
@@ -84,9 +103,10 @@ jobs:
         sleep 25
         
         # 健康检查
+        echo "🏥 执行健康检查..."
         CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' delta-service-container 2>/dev/null || echo "unknown")
         if [ "$CONTAINER_STATUS" != "running" ]; then
-          echo "❌ 容器未正常运行"
+          echo "❌ 容器未正常运行，状态: $CONTAINER_STATUS"
           docker logs delta-service-container
           exit 1
         fi
