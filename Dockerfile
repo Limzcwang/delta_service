@@ -4,11 +4,19 @@ FROM python:3.11-slim
 # 设置工作目录
 WORKDIR /app
 
+# 配置国内镜像源和网络优化
+RUN echo "配置国内镜像源和网络优化..." && \
+    # 配置pip国内镜像源
+    pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn && \
+    pip config set global.timeout 120 && \
+    pip config set global.retries 5
+
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 安装依赖（增加网络超时和重试机制）
+RUN pip install --no-cache-dir --timeout 120 --retries 5 -r requirements.txt
 
 # 复制应用代码
 COPY . .
