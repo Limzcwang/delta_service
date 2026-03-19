@@ -1,418 +1,370 @@
-from typing import Optional, List, Dict, Any
-from datetime import datetime
-from dao.user import UserDao, User_Pydantic, UserIn_Pydantic
-import hashlib
-import logging
+"""用户服务层（业务逻辑层）"""
 
-logger = logging.getLogger(__name__)
+import time
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Set, Any
+import threading
 
-# 在线用户数据结构
-USERS_ONLINE: List[Dict[str, Any]] = []
+from log.logger import logger, log_exception, log_business_event
 
-# 用户最后活动时间跟踪
-USER_LAST_ACTIVITY: Dict[str, datetime] = {}
 
-# 离线检测间隔（秒）
-OFFLINE_CHECK_INTERVAL = 60
+# 用户数据结构
+USERS_ONLINE: Dict[str, Dict[str, Any]] = {}
+# 线程锁
+user_lock = threading.Lock()
 
-# 最大无活动时间（秒）
-MAX_INACTIVITY_TIME = 300  # 5分钟
 
 class UserService:
-    """用户服务层"""
-
+    """用户服务类"""
+    
     @staticmethod
-    async def create_user(username: str, password: Optional[str] = None) -> dict:
-        """创建用户
+    async def update_user_activity(username: str) -> bool:
+        """更新用户活动时间
         
         Args:
             username: 用户名
-            password: 密码（可选）
-            
-        Returns:
-            创建的用户信息
-        """
-        try:
-            # 检查用户名是否已存在
-            existing_user = await UserDao.get_user_by_username(username)
-            if existing_user:
-                return {"success": False, "message": "用户名已存在", "user": None}
-
-            # 创建用户
-            user = await UserDao.create_user(username, password)
-            user_data = await User_Pydantic.from_tortoise_orm(user)
-
-            logger.info(f"用户创建成功: {username}")
-            return {"success": True, "message": "用户创建成功", "user": user_data.dict()}
-
-        except Exception as e:
-            logger.error(f"创建用户失败: {str(e)}")
-            return {"success": False, "message": f"创建用户失败: {str(e)}", "user": None}
-
-    @staticmethod
-    async def get_user_by_id(user_id: int) -> dict:
-        """根据ID获取用户信息
         
-        Args:
-            user_id: 用户ID
-            
         Returns:
-            用户信息
+            更新是否成功
         """
         try:
-            user = await UserDao.get_user_by_id(user_id)
-            if not user:
-                return {"success": False, "message": "用户不存在", "user": None}
-
-            user_data = await User_Pydantic.from_tortoise_orm(user)
-            return {"success": True, "message": "获取用户成功", "user": user_data.dict()}
-
-        except Exception as e:
-            logger.error(f"获取用户失败: {str(e)}")
-            return {"success": False, "message": f"获取用户失败: {str(e)}", "user": None}
-
-    @staticmethod
-    async def get_user_by_username(username: str) -> dict:
-        """根据用户名获取用户信息
-        
-        Args:
-            username: 用户名
-            
-        Returns:
-            用户信息
-        """
-        try:
-            user = await UserDao.get_user_by_username(username)
-            if not user:
-                return {"success": False, "message": "用户不存在", "user": None}
-
-            user_data = await User_Pydantic.from_tortoise_orm(user)
-            return {"success": True, "message": "获取用户成功", "user": user_data.dict()}
-
-        except Exception as e:
-            logger.error(f"获取用户失败: {str(e)}")
-            return {"success": False, "message": f"获取用户失败: {str(e)}", "user": None}
-
-    @staticmethod
-    async def update_user(user_id: int, **kwargs) -> dict:
-        """更新用户信息
-        
-        Args:
-            user_id: 用户ID
-            **kwargs: 要更新的字段
-            
-        Returns:
-            更新结果
-        """
-        try:
-            # 检查用户是否存在
-            existing_user = await UserDao.get_user_by_id(user_id)
-            if not existing_user:
-                return {"success": False, "message": "用户不存在"}
-
-            # 更新用户信息
-            updated_user = await UserDao.update_user(user_id, **kwargs)
-            if updated_user:
-                user_data = await User_Pydantic.from_tortoise_orm(updated_user)
-                logger.info(f"用户信息更新成功: {user_id}")
-                return {"success": True, "message": "用户信息更新成功", "user": user_data.dict()}
-            else:
-                return {"success": False, "message": "用户信息更新失败"}
-
-        except Exception as e:
-            logger.error(f"更新用户信息失败: {str(e)}")
-            return {"success": False, "message": f"更新用户信息失败: {str(e)}"}
-
-    @staticmethod
-    async def delete_user(user_id: int) -> dict:
-        """删除用户（软删除）
-        
-        Args:
-            user_id: 用户ID
-            
-        Returns:
-            删除结果
-        """
-        try:
-            # 检查用户是否存在
-            existing_user = await UserDao.get_user_by_id(user_id)
-            if not existing_user:
-                return {"success": False, "message": "用户不存在"}
-
-            # 执行软删除
-            success = await UserDao.delete_user(user_id)
-            if success:
-                logger.info(f"用户删除成功: {user_id}")
-                return {"success": True, "message": "用户删除成功"}
-            else:
-                return {"success": False, "message": "用户删除失败"}
-
-        except Exception as e:
-            logger.error(f"删除用户失败: {str(e)}")
-            return {"success": False, "message": f"删除用户失败: {str(e)}"}
-
-    @staticmethod
-    async def login(username: str, password: str) -> dict:
-        """用户登录
-        
-        Args:
-            username: 用户名
-            password: 密码
-            
-        Returns:
-            登录结果
-        """
-        try:
-            # 验证登录
-            user = await UserDao.login(username, password)
-            if user:
-                user_data = await User_Pydantic.from_tortoise_orm(user)
-                logger.info(f"用户登录成功: {username}")
-                
-                # 更新最后活动时间
-                USER_LAST_ACTIVITY[username] = datetime.now()
-                
-                # 检查用户是否已在线，如果在线则更新信息
-                user_found = False
-                for i, online_user in enumerate(USERS_ONLINE):
-                    if online_user.get("username") == username:
-                        USERS_ONLINE[i] = {
-                            "username": username,
-                            "user_data": user_data.dict(),
-                            "last_activity": datetime.now(),
-                            "websocket": online_user.get("websocket"),
-                            "login_time": datetime.now()
-                        }
-                        user_found = True
-                        break
-                
-                # 如果用户不在线，添加到在线列表
-                if not user_found:
-                    USERS_ONLINE.append({
+            with user_lock:
+                if username not in USERS_ONLINE:
+                    USERS_ONLINE[username] = {
                         "username": username,
-                        "user_data": user_data.dict(),
-                        "last_activity": datetime.now(),
+                        "last_activity": time.time(),
+                        "login_time": time.time(),
                         "websocket": None,
-                        "login_time": datetime.now()
-                    })
-                    logger.info(f"用户添加到在线列表: {username}")
-                
-                return {"success": True, "message": "登录成功", "user": user_data.dict()}
-            else:
-                return {"success": False, "message": "用户名或密码错误", "user": None}
-
-        except Exception as e:
-            logger.error(f"用户登录失败: {str(e)}")
-            return {"success": False, "message": f"登录失败: {str(e)}", "user": None}
-
-    @staticmethod
-    async def list_users(skip: int = 0, limit: int = 100) -> dict:
-        """获取用户列表
-        
-        Args:
-            skip: 跳过数量
-            limit: 限制数量
+                        "status": "online"
+                    }
+                else:
+                    USERS_ONLINE[username]["last_activity"] = time.time()
             
-        Returns:
-            用户列表
-        """
-        try:
-            # 获取未删除的用户列表
-            users = await UserDao.list_users(skip, limit)
-            users_data = [await User_Pydantic.from_tortoise_orm(user) for user in users]
-
-            return {
-                "success": True,
-                "message": "获取用户列表成功",
-                "users": [user.dict() for user in users_data],
-                "total": len(users_data)
-            }
-
+            # 记录业务事件
+            log_business_event("user_activity", username, details={"action": "更新活动时间"})
+            
+            return True
+            
         except Exception as e:
-            logger.error(f"获取用户列表失败: {str(e)}")
-            return {"success": False, "message": f"获取用户列表失败: {str(e)}", "users": [], "total": 0}
-
+            log_exception(e, "更新用户活动时间失败", {"username": username})
+            return False
+    
     @staticmethod
-    async def logout(username: str) -> dict:
-        """用户登出
+    async def update_user_websocket(username: str, websocket: Optional[Any]) -> bool:
+        """更新用户WebSocket连接信息
         
         Args:
             username: 用户名
-            
+            websocket: WebSocket连接对象，None表示断开连接
+        
         Returns:
-            登出结果
+            更新是否成功
         """
         try:
-            # 从在线列表中移除用户
-            for i, online_user in enumerate(USERS_ONLINE):
-                if online_user.get("username") == username:
-                    USERS_ONLINE.pop(i)
-                    # 清理最后活动时间记录
-                    if username in USER_LAST_ACTIVITY:
-                        del USER_LAST_ACTIVITY[username]
-                    logger.info(f"用户登出成功，已从在线列表移除: {username}")
-                    return {"success": True, "message": "登出成功"}
+            with user_lock:
+                if username in USERS_ONLINE:
+                    USERS_ONLINE[username]["websocket"] = websocket
+                    
+                    # 如果WebSocket为None，表示用户离线
+                    if websocket is None:
+                        USERS_ONLINE[username]["status"] = "offline"
+                        USERS_ONLINE[username]["logout_time"] = time.time()
+                    else:
+                        USERS_ONLINE[username]["status"] = "online"
+                else:
+                    # 用户不在线，创建新的在线记录
+                    USERS_ONLINE[username] = {
+                        "username": username,
+                        "last_activity": time.time(),
+                        "login_time": time.time(),
+                        "websocket": websocket,
+                        "status": "online"
+                    }
             
-            logger.info(f"用户不在在线列表中: {username}")
-            return {"success": False, "message": "用户不在线"}
+            action = "断开连接" if websocket is None else "连接建立"
+            log_business_event("websocket_update", username, details={
+                "action": action,
+                "websocket_id": str(id(websocket))[-6:] if websocket else None
+            })
+            
+            return True
             
         except Exception as e:
-            logger.error(f"用户登出失败: {str(e)}")
-            return {"success": False, "message": f"登出失败: {str(e)}"}
-
+            log_exception(e, "更新用户WebSocket信息失败", {"username": username})
+            return False
+    
     @staticmethod
-    async def check_user_online(username: str) -> dict:
+    async def check_user_online(username: str) -> Dict[str, Any]:
         """检查用户是否在线
         
         Args:
             username: 用户名
-            
-        Returns:
-            在线状态
-        """
-        try:
-            for online_user in USERS_ONLINE:
-                if online_user.get("username") == username:
-                    return {
-                        "success": True, 
-                        "message": "用户在线", 
-                        "online": True, 
-                        "user": online_user.get("user_data"),
-                        "last_activity": online_user.get("last_activity"),
-                        "login_time": online_user.get("login_time")
-                    }
-            
-            return {"success": True, "message": "用户离线", "online": False, "user": None}
-            
-        except Exception as e:
-            logger.error(f"检查用户在线状态失败: {str(e)}")
-            return {"success": False, "message": f"检查在线状态失败: {str(e)}", "online": False, "user": None}
-
-    @staticmethod
-    async def remove_offline_user(username: str) -> dict:
-        """移除离线用户
         
-        Args:
-            username: 用户名
-            
         Returns:
-            移除结果
+            检查结果
         """
         try:
-            # 检查用户是否在数据库中
-            user = await UserDao.get_user_by_username(username)
-            if not user:
-                # 如果用户不存在于数据库，从在线列表移除
-                for i, online_user in enumerate(USERS_ONLINE):
-                    if online_user.get("username") == username:
-                        USERS_ONLINE.pop(i)
-                        if username in USER_LAST_ACTIVITY:
-                            del USER_LAST_ACTIVITY[username]
-                        logger.info(f"移除不存在的用户: {username}")
-                        return {"success": True, "message": "用户不存在，已从在线列表移除"}
-                return {"success": False, "message": "用户不存在且不在在线列表"}
-            
-            # 如果用户存在但需要强制移除（比如检测到离线）
-            for i, online_user in enumerate(USERS_ONLINE):
-                if online_user.get("username") == username:
-                    USERS_ONLINE.pop(i)
-                    if username in USER_LAST_ACTIVITY:
-                        del USER_LAST_ACTIVITY[username]
-                    logger.info(f"用户离线，已从在线列表移除: {username}")
-                    return {"success": True, "message": "用户已离线，已从在线列表移除"}
-            
-            logger.info(f"用户不在在线列表中: {username}")
-            return {"success": False, "message": "用户不在在线列表"}
-            
+            with user_lock:
+                if username in USERS_ONLINE:
+                    user_info = USERS_ONLINE[username]
+                    
+                    # 检查用户是否超时（5分钟无活动视为离线）
+                    current_time = time.time()
+                    last_activity = user_info.get("last_activity", 0)
+                    
+                    if current_time - last_activity > 300:  # 5分钟超时
+                        # 用户超时，标记为离线
+                        user_info["status"] = "offline"
+                        user_info["logout_time"] = current_time
+                        
+                        return {
+                            "online": False,
+                            "message": "用户已超时离线",
+                            "last_activity": last_activity,
+                            "timeout": True
+                        }
+                    
+                    return {
+                        "online": True,
+                        "username": username,
+                        "last_activity": last_activity,
+                        "login_time": user_info.get("login_time"),
+                        "status": user_info.get("status", "online"),
+                        "websocket": user_info.get("websocket") is not None
+                    }
+                else:
+                    return {
+                        "online": False,
+                        "message": "用户不在线",
+                        "username": username
+                    }
+                    
         except Exception as e:
-            logger.error(f"移除离线用户失败: {str(e)}")
-            return {"success": False, "message": f"移除离线用户失败: {str(e)}"}
-
+            log_exception(e, "检查用户在线状态失败", {"username": username})
+            return {
+                "online": False,
+                "message": f"检查失败: {str(e)}",
+                "username": username
+            }
+    
     @staticmethod
-    async def get_online_users() -> dict:
+    async def get_online_users() -> List[Dict[str, Any]]:
         """获取所有在线用户列表
         
         Returns:
             在线用户列表
         """
         try:
-            online_users = []
-            for online_user in USERS_ONLINE:
-                online_users.append({
-                    "username": online_user.get("username"),
-                    "user_data": online_user.get("user_data"),
-                    "last_activity": online_user.get("last_activity"),
-                    "login_time": online_user.get("login_time"),
-                    "has_websocket": online_user.get("websocket") is not None
+            with user_lock:
+                online_users = []
+                current_time = time.time()
+                
+                for username, user_info in USERS_ONLINE.items():
+                    # 检查用户是否真正在线（3分钟内活动）
+                    last_activity = user_info.get("last_activity", 0)
+                    
+                    if current_time - last_activity <= 180:  # 3分钟内有活动
+                        online_users.append({
+                            "username": username,
+                            "last_activity": last_activity,
+                            "login_time": user_info.get("login_time"),
+                            "status": user_info.get("status", "online"),
+                            "websocket": user_info.get("websocket") is not None,
+                            "inactive_minutes": round((current_time - last_activity) / 60, 1)
+                        })
+                
+                # 按最后活动时间排序（最近活动的在前）
+                online_users.sort(key=lambda x: x["last_activity"], reverse=True)
+                
+                # 记录业务事件
+                log_business_event("get_online_users", details={
+                    "count": len(online_users),
+                    "total_users": len(USERS_ONLINE)
                 })
-            
-            return {
-                "success": True, 
-                "message": "获取在线用户列表成功", 
-                "online_users": online_users,
-                "total": len(online_users)
-            }
-            
+                
+                return online_users
+                
         except Exception as e:
-            logger.error(f"获取在线用户列表失败: {str(e)}")
-            return {"success": False, "message": f"获取在线用户列表失败: {str(e)}", "online_users": [], "total": 0}
-
+            log_exception(e, "获取在线用户列表失败")
+            return []
+    
     @staticmethod
-    async def update_user_activity(username: str) -> dict:
-        """更新用户活动时间
+    async def check_and_remove_inactive_users(inactive_threshold: int = 300) -> Dict[str, Any]:
+        """检查并移除不活跃用户
         
         Args:
-            username: 用户名
-            
-        Returns:
-            更新结果
-        """
-        try:
-            current_time = datetime.now()
-            USER_LAST_ACTIVITY[username] = current_time
-            
-            # 同时更新在线用户列表中的最后活动时间
-            for online_user in USERS_ONLINE:
-                if online_user.get("username") == username:
-                    online_user["last_activity"] = current_time
-                    break
-            
-            return {"success": True, "message": "用户活动时间更新成功"}
-            
-        except Exception as e:
-            logger.error(f"更新用户活动时间失败: {str(e)}")
-            return {"success": False, "message": f"更新用户活动时间失败: {str(e)}"}
-
-    @staticmethod
-    async def check_and_remove_inactive_users() -> dict:
-        """检查并移除不活跃用户
+            inactive_threshold: 不活跃阈值（秒），默认5分钟
         
         Returns:
             移除结果
         """
         try:
-            current_time = datetime.now()
             removed_users = []
+            current_time = time.time()
             
-            for i in range(len(USERS_ONLINE) - 1, -1, -1):
-                online_user = USERS_ONLINE[i]
-                username = online_user.get("username")
-                last_activity = online_user.get("last_activity")
+            with user_lock:
+                users_to_remove = []
                 
-                if last_activity and (current_time - last_activity).total_seconds() > MAX_INACTIVITY_TIME:
-                    # 用户超时，移除
-                    USERS_ONLINE.pop(i)
-                    if username in USER_LAST_ACTIVITY:
-                        del USER_LAST_ACTIVITY[username]
-                    removed_users.append(username)
-                    logger.info(f"自动移除不活跃用户: {username}")
+                for username, user_info in USERS_ONLINE.items():
+                    last_activity = user_info.get("last_activity", 0)
+                    
+                    # 如果用户超过阈值时间无活动，则移除
+                    if current_time - last_activity > inactive_threshold:
+                        users_to_remove.append(username)
+                
+                # 移除不活跃用户
+                for username in users_to_remove:
+                    user_info = USERS_ONLINE.pop(username, None)
+                    if user_info:
+                        removed_users.append(username)
+                        
+                        # 记录用户离线事件
+                        log_business_event("user_timeout", username, details={
+                            "action": "超时移除",
+                            "last_activity": user_info.get("last_activity"),
+                            "inactive_minutes": round((current_time - last_activity) / 60, 1)
+                        })
             
-            return {
-                "success": True, 
+            result = {
+                "success": True,
                 "message": f"检查完成，移除了 {len(removed_users)} 个不活跃用户",
-                "removed_users": removed_users
+                "removed_users": removed_users,
+                "total_removed": len(removed_users),
+                "threshold_seconds": inactive_threshold,
+                "threshold_minutes": round(inactive_threshold / 60, 1)
             }
             
+            if removed_users:
+                logger.info(f"离线检测: 移除了 {len(removed_users)} 个不活跃用户: {removed_users}")
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"检查不活跃用户失败: {str(e)}")
-            return {"success": False, "message": f"检查不活跃用户失败: {str(e)}", "removed_users": []}
+            log_exception(e, "检查不活跃用户失败")
+            return {
+                "success": False,
+                "message": f"检查失败: {str(e)}",
+                "removed_users": [],
+                "total_removed": 0
+            }
+    
+    @staticmethod
+    async def bind_websocket_connection(username: str, websocket: Any) -> bool:
+        """绑定WebSocket连接到用户
+        
+        Args:
+            username: 用户名
+            websocket: WebSocket连接对象
+        
+        Returns:
+            绑定是否成功
+        """
+        try:
+            with user_lock:
+                if username not in USERS_ONLINE:
+                    # 创建新的在线用户记录
+                    USERS_ONLINE[username] = {
+                        "username": username,
+                        "last_activity": time.time(),
+                        "login_time": time.time(),
+                        "websocket": websocket,
+                        "status": "online"
+                    }
+                else:
+                    # 更新现有用户的WebSocket连接
+                    USERS_ONLINE[username]["websocket"] = websocket
+                    USERS_ONLINE[username]["status"] = "online"
+                    USERS_ONLINE[username]["last_activity"] = time.time()
+            
+            # 记录业务事件
+            log_business_event("websocket_bind", username, details={
+                "action": "绑定WebSocket连接",
+                "websocket_id": str(id(websocket))[-6:]
+            })
+            
+            return True
+            
+        except Exception as e:
+            log_exception(e, "绑定WebSocket连接失败", {"username": username})
+            return False
+    
+    @staticmethod
+    async def unbind_websocket_connection(username: str) -> bool:
+        """解绑用户的WebSocket连接
+        
+        Args:
+            username: 用户名
+        
+        Returns:
+            解绑是否成功
+        """
+        try:
+            with user_lock:
+                if username in USERS_ONLINE:
+                    USERS_ONLINE[username]["websocket"] = None
+                    USERS_ONLINE[username]["status"] = "offline"
+                    USERS_ONLINE[username]["logout_time"] = time.time()
+            
+            # 记录业务事件
+            log_business_event("websocket_unbind", username, details={"action": "解绑WebSocket连接"})
+            
+            return True
+            
+        except Exception as e:
+            log_exception(e, "解绑WebSocket连接失败", {"username": username})
+            return False
+    
+    @staticmethod
+    async def get_user_websocket(username: str) -> Optional[Any]:
+        """获取用户的WebSocket连接
+        
+        Args:
+            username: 用户名
+        
+        Returns:
+            WebSocket连接对象，如果用户不在线或未连接则返回None
+        """
+        try:
+            with user_lock:
+                if username in USERS_ONLINE:
+                    return USERS_ONLINE[username].get("websocket")
+                return None
+                
+        except Exception as e:
+            log_exception(e, "获取用户WebSocket连接失败", {"username": username})
+            return None
+    
+    @staticmethod
+    async def force_logout_user(username: str) -> bool:
+        """强制用户下线
+        
+        Args:
+            username: 用户名
+        
+        Returns:
+            强制下线是否成功
+        """
+        try:
+            with user_lock:
+                if username in USERS_ONLINE:
+                    # 强制关闭WebSocket连接（如果存在）
+                    websocket = USERS_ONLINE[username].get("websocket")
+                    if websocket:
+                        try:
+                            await websocket.close()
+                        except Exception:
+                            pass
+                    
+                    # 移除用户在线记录
+                    USERS_ONLINE.pop(username, None)
+                    
+                    # 记录业务事件
+                    log_business_event("force_logout", username, details={"action": "强制下线"})
+                    
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            log_exception(e, "强制用户下线失败", {"username": username})
+            return False

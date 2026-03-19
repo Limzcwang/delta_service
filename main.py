@@ -14,9 +14,7 @@ from log.api_logger import APILoggingMiddleware
 from log.sql_logger import init_sql_logging
 from service.user import UserService
 from websocket import (
-    data_pusher,
-    inactive_user_checker,
-    run_websocket_server
+    websocket_manager
 )
 
 
@@ -107,10 +105,10 @@ async def main():
 
         # 同时启动多个服务
         await asyncio.gather(
-            run_websocket_server(),
+            websocket_manager.run_websocket_server(),
             run_api_server(),
-            data_pusher(),
-            inactive_user_checker()
+            websocket_manager.data_pusher(),
+            websocket_manager.inactive_user_checker()
         )
     except Exception as e:
         log_exception(e, "Delta Service 启动失败")
