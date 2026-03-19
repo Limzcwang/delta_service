@@ -1,18 +1,13 @@
 import asyncio
-import json
-from datetime import datetime
 
 import uvicorn
-import websockets
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from api.init import create_app
 from config.database import init_database, close_database
 from log.logger import logger, log_exception, GlobalLogger
-from log.api_logger import APILoggingMiddleware
 from log.sql_logger import init_sql_logging
-from service.user import UserService
 from websocket import (
     websocket_manager
 )
@@ -65,15 +60,15 @@ async def init_services():
     try:
         # 记录系统初始化开始
         GlobalLogger.startup()
-        
+
         # 初始化数据库连接
         await init_database()
         GlobalLogger.database_connect("delta_service", True, "数据库连接初始化成功")
-        
+
         # 初始化SQL日志记录
         await init_sql_logging()
         logger.info("SQL日志记录初始化完成")
-        
+
         logger.info("所有服务初始化完成")
     except Exception as e:
         log_exception(e, "服务初始化失败")
@@ -86,10 +81,10 @@ async def cleanup_services():
         # 关闭数据库连接
         await close_database()
         GlobalLogger.database_disconnect("delta_service", True, "数据库连接正常关闭")
-        
+
         # 记录系统关闭
         GlobalLogger.shutdown()
-        
+
         logger.info("服务资源清理完成")
     except Exception as e:
         log_exception(e, "服务清理失败")

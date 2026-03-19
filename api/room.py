@@ -1,15 +1,16 @@
+import time
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from typing import List, Optional
-import time
 
+from log.logger import log_api_request, log_exception
 from service.room import (
     create_room, join_room, leave_room,
     get_room_info, get_public_room_list,
     RoomServiceError, RoomNotFoundError, UserNotInRoomError,
     InvalidDomainError, RoomAlreadyExistsError
 )
-from log.logger import logger, log_api_request, log_exception
 
 router = APIRouter(prefix="/api/room", tags=["房间管理"])
 
@@ -98,13 +99,13 @@ async def create_room_api(request: Request, create_request: CreateRoomRequest):
     try:
         # 记录API请求
         client_ip = request.client.host if request.client else "unknown"
-        
+
         room_code = create_room(create_request.user_id, domain_enum=create_request.domain_enum)
-        
+
         # 记录成功请求
         duration = time.time() - start_time
         log_api_request("POST", "/api/room/create", 200, client_ip, duration)
-        
+
         return {
             "room_code": room_code,
             "message": "房间创建成功"
@@ -116,13 +117,13 @@ async def create_room_api(request: Request, create_request: CreateRoomRequest):
         status_code = 500
         if isinstance(e, InvalidDomainError):
             status_code = 400
-        
+
         log_api_request("POST", "/api/room/create", status_code, client_ip, duration)
         log_exception(e, "创建房间API失败", {
             "user_id": create_request.user_id,
             "domain_enum": create_request.domain_enum
         })
-        
+
         raise handle_service_exception(e)
 
 
@@ -144,13 +145,13 @@ async def join_room_api(request: Request, join_request: JoinRoomRequest):
     start_time = time.time()
     try:
         client_ip = request.client.host if request.client else "unknown"
-        
+
         join_room(join_request.user_id, join_request.room_code)
         room_info = get_room_info(join_request.room_code)
-        
+
         duration = time.time() - start_time
         log_api_request("POST", "/api/room/join", 200, client_ip, duration)
-        
+
         return {
             "message": "加入房间成功",
             "room_info": {
@@ -168,13 +169,13 @@ async def join_room_api(request: Request, join_request: JoinRoomRequest):
         status_code = 500
         if isinstance(e, RoomNotFoundError):
             status_code = 404
-        
+
         log_api_request("POST", "/api/room/join", status_code, client_ip, duration)
         log_exception(e, "加入房间API失败", {
             "user_id": join_request.user_id,
             "room_code": join_request.room_code
         })
-        
+
         raise handle_service_exception(e)
 
 
@@ -196,12 +197,12 @@ async def leave_room_api(request: Request, leave_request: JoinRoomRequest):
     start_time = time.time()
     try:
         client_ip = request.client.host if request.client else "unknown"
-        
+
         leave_room(leave_request.user_id, leave_request.room_code)
-        
+
         duration = time.time() - start_time
         log_api_request("POST", "/api/room/leave", 200, client_ip, duration)
-        
+
         return {"message": "离开房间成功"}
     except Exception as e:
         duration = time.time() - start_time
@@ -209,13 +210,13 @@ async def leave_room_api(request: Request, leave_request: JoinRoomRequest):
         status_code = 500
         if isinstance(e, (RoomNotFoundError, UserNotInRoomError)):
             status_code = 404
-        
+
         log_api_request("POST", "/api/room/leave", status_code, client_ip, duration)
         log_exception(e, "离开房间API失败", {
             "user_id": leave_request.user_id,
             "room_code": leave_request.room_code
         })
-        
+
         raise handle_service_exception(e)
 
 
@@ -237,12 +238,12 @@ async def get_room_info_api(request: Request, room_code: str):
     start_time = time.time()
     try:
         client_ip = request.client.host if request.client else "unknown"
-        
+
         room_info = get_room_info(room_code)
-        
+
         duration = time.time() - start_time
         log_api_request("GET", f"/api/room/info/{room_code}", 200, client_ip, duration)
-        
+
         return RoomInfoResponse(
             room_code=room_code,
             domain=room_info["domain"],
@@ -257,10 +258,10 @@ async def get_room_info_api(request: Request, room_code: str):
         status_code = 500
         if isinstance(e, RoomNotFoundError):
             status_code = 404
-        
+
         log_api_request("GET", f"/api/room/info/{room_code}", status_code, client_ip, duration)
         log_exception(e, "获取房间信息API失败", {"room_code": room_code})
-        
+
         raise handle_service_exception(e)
 
 
@@ -280,7 +281,7 @@ async def get_public_room_list_api(request: Request):
     start_time = time.time()
     try:
         client_ip = request.client.host if request.client else "unknown"
-        
+
         rooms = get_public_room_list()
         room_responses = []
         for room_info in rooms:
@@ -292,16 +293,16 @@ async def get_public_room_list_api(request: Request):
                 online=list(room_info["online"]),
                 created_at=room_info["created_at"]
             ))
-        
+
         duration = time.time() - start_time
         log_api_request("GET", "/api/room/public/list", 200, client_ip, duration)
-        
+
         return PublicRoomListResponse(rooms=room_responses)
     except Exception as e:
         duration = time.time() - start_time
         client_ip = request.client.host if request.client else "unknown"
-        
+
         log_api_request("GET", "/api/room/public/list", 500, client_ip, duration)
         log_exception(e, "获取公共房间列表API失败")
-        
+
         raise handle_service_exception(e)

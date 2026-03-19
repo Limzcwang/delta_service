@@ -13,118 +13,118 @@ jobs:
     runs-on: self-hosted
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4.2.1
+      - name: Checkout code
+        uses: actions/checkout@v4.2.1
 
-    - name: Check Docker environment
-      run: |
-        echo "🔍 检查Docker环境..."
-        if ! command -v docker &> /dev/null; then
-          echo "❌ Docker未安装"
-          exit 1
-        fi
-        
-        if ! systemctl is-active --quiet docker; then
-          echo "🚀 启动Docker服务..."
-          sudo systemctl start docker || exit 1
-        fi
-        
-        echo "✅ Docker环境正常"
+      - name: Check Docker environment
+        run: |
+          echo "🔍 检查Docker环境..."
+          if ! command -v docker &> /dev/null; then
+            echo "❌ Docker未安装"
+            exit 1
+          fi
+          
+          if ! systemctl is-active --quiet docker; then
+            echo "🚀 启动Docker服务..."
+            sudo systemctl start docker || exit 1
+          fi
+          
+          echo "✅ Docker环境正常"
 
-    - name: Build Docker image with optimization
-      run: |
-        echo "🏗️ 使用优化脚本构建Docker镜像..."
-        # 给脚本添加执行权限
-        chmod +x docker-build-optimize.sh
-        # 运行优化构建脚本
-        ./docker-build-optimize.sh
-        echo "✅ 镜像构建完成"
+      - name: Build Docker image with optimization
+        run: |
+          echo "🏗️ 使用优化脚本构建Docker镜像..."
+          # 给脚本添加执行权限
+          chmod +x docker-build-optimize.sh
+          # 运行优化构建脚本
+          ./docker-build-optimize.sh
+          echo "✅ 镜像构建完成"
 
-    - name: Test Docker image
-      run: |
-        echo "🧪 测试镜像启动..."
-        # 清理可能存在的测试容器
-        docker stop test-container 2>/dev/null || true
-        docker rm test-container 2>/dev/null || true
-        
-        # 启动测试容器
-        docker run -d --name test-container -p 18000:8000 delta-service
-        sleep 15
-        
-        # 检查服务是否正常响应
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18000/docs || echo "000")
-        if [ "$HTTP_STATUS" != "200" ]; then
-          echo "❌ 镜像测试失败，HTTP状态码: $HTTP_STATUS"
-          docker logs test-container
-          exit 1
-        fi
-        
-        echo "✅ 镜像测试通过"
-        docker stop test-container
-        docker rm test-container
+      - name: Test Docker image
+        run: |
+          echo "🧪 测试镜像启动..."
+          # 清理可能存在的测试容器
+          docker stop test-container 2>/dev/null || true
+          docker rm test-container 2>/dev/null || true
+          
+          # 启动测试容器
+          docker run -d --name test-container -p 18000:8000 delta-service
+          sleep 15
+          
+          # 检查服务是否正常响应
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18000/docs || echo "000")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ 镜像测试失败，HTTP状态码: $HTTP_STATUS"
+            docker logs test-container
+            exit 1
+          fi
+          
+          echo "✅ 镜像测试通过"
+          docker stop test-container
+          docker rm test-container
 
-    - name: Deploy application
-      run: |
-        echo "🚀 开始部署应用..."
-        
-        # 验证本地镜像是否存在且可用
-        echo "🔍 检查本地镜像状态..."
-        if docker image inspect delta-service &> /dev/null; then
-          echo "✅ 本地镜像delta-service存在"
-          # 验证镜像是否可运行
-          if docker run --rm delta-service echo "镜像验证成功" &> /dev/null; then
-            echo "✅ 镜像验证通过，可以正常运行"
+      - name: Deploy application
+        run: |
+          echo "🚀 开始部署应用..."
+          
+          # 验证本地镜像是否存在且可用
+          echo "🔍 检查本地镜像状态..."
+          if docker image inspect delta-service &> /dev/null; then
+            echo "✅ 本地镜像delta-service存在"
+            # 验证镜像是否可运行
+            if docker run --rm delta-service echo "镜像验证成功" &> /dev/null; then
+              echo "✅ 镜像验证通过，可以正常运行"
+            else
+              echo "⚠️ 镜像验证失败，需要重新构建"
+              chmod +x docker-build-optimize.sh
+              ./docker-build-optimize.sh
+            fi
           else
-            echo "⚠️ 镜像验证失败，需要重新构建"
+            echo "❌ 本地镜像delta-service不存在，需要重新构建"
             chmod +x docker-build-optimize.sh
             ./docker-build-optimize.sh
           fi
-        else
-          echo "❌ 本地镜像delta-service不存在，需要重新构建"
-          chmod +x docker-build-optimize.sh
-          ./docker-build-optimize.sh
-        fi
-        
-        # 停止并清理旧容器
-        echo "🔄 清理旧容器..."
-        docker stop delta-service-container 2>/dev/null || true
-        docker rm delta-service-container 2>/dev/null || true
-        
-        # 运行新容器（使用本地构建的镜像）
-        echo "🐳 启动新容器..."
-        docker run -d \
-          --name delta-service-container \
-          -p 8000:8000 \
-          -p 8765:8765 \
-          --restart unless-stopped \
-          delta-service
-        
-        echo "⏳ 等待服务启动..."
-        sleep 25
-        
-        # 健康检查
-        echo "🏥 执行健康检查..."
-        CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' delta-service-container 2>/dev/null || echo "unknown")
-        if [ "$CONTAINER_STATUS" != "running" ]; then
-          echo "❌ 容器未正常运行，状态: $CONTAINER_STATUS"
-          docker logs delta-service-container
-          exit 1
-        fi
-        
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs || echo "000")
-        if [ "$HTTP_STATUS" != "200" ]; then
-          echo "❌ 健康检查失败，状态码: $HTTP_STATUS"
-          docker logs delta-service-container
-          exit 1
-        fi
-        
-        echo "✅ 部署成功！服务运行正常"
+          
+          # 停止并清理旧容器
+          echo "🔄 清理旧容器..."
+          docker stop delta-service-container 2>/dev/null || true
+          docker rm delta-service-container 2>/dev/null || true
+          
+          # 运行新容器（使用本地构建的镜像）
+          echo "🐳 启动新容器..."
+          docker run -d \
+            --name delta-service-container \
+            -p 8000:8000 \
+            -p 8765:8765 \
+            --restart unless-stopped \
+            delta-service
+          
+          echo "⏳ 等待服务启动..."
+          sleep 25
+          
+          # 健康检查
+          echo "🏥 执行健康检查..."
+          CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' delta-service-container 2>/dev/null || echo "unknown")
+          if [ "$CONTAINER_STATUS" != "running" ]; then
+            echo "❌ 容器未正常运行，状态: $CONTAINER_STATUS"
+            docker logs delta-service-container
+            exit 1
+          fi
+          
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs || echo "000")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ 健康检查失败，状态码: $HTTP_STATUS"
+            docker logs delta-service-container
+            exit 1
+          fi
+          
+          echo "✅ 部署成功！服务运行正常"
 
-    - name: Notify deployment status
-      if: always()
-      run: |
-        if [ "${{ job.status }}" = "success" ]; then
-          echo "🎉 部署成功！服务已更新到最新版本"
-        else
-          echo "❌ 部署失败，请检查日志详情"
-        fi
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "🎉 部署成功！服务已更新到最新版本"
+          else
+            echo "❌ 部署失败，请检查日志详情"
+          fi

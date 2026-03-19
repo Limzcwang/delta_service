@@ -3,38 +3,49 @@ import string
 import threading
 import time
 from datetime import datetime
-from typing import Dict, Set, List, Optional, Any
+from typing import Dict, List, Optional, Any
 
 import const.str
 from log.logger import logger, log_exception, log_business_event
 
+
 # 自定义异常类
 class RoomServiceError(Exception):
     """房间服务基础异常"""
+
     def __init__(self, message: str, error_code: str = None):
         self.message = message
         self.error_code = error_code
         super().__init__(self.message)
 
+
 class RoomNotFoundError(RoomServiceError):
     """房间不存在异常"""
+
     def __init__(self, room_code: str):
         super().__init__(f"房间 {room_code} 不存在", "ROOM_NOT_FOUND")
 
+
 class RoomAlreadyExistsError(RoomServiceError):
     """房间已存在异常"""
+
     def __init__(self, room_code: str):
         super().__init__(f"房间 {room_code} 已存在", "ROOM_ALREADY_EXISTS")
 
+
 class UserNotInRoomError(RoomServiceError):
     """用户不在房间异常"""
+
     def __init__(self, user_id: str, room_code: str):
         super().__init__(f"用户 {user_id} 不在房间 {room_code}", "USER_NOT_IN_ROOM")
 
+
 class InvalidDomainError(RoomServiceError):
     """无效的房间领域异常"""
+
     def __init__(self, domain_enum: int):
         super().__init__(f"无效的房间领域: {domain_enum}", "INVALID_DOMAIN")
+
 
 # 房间管理
 ROOM_MANAGER: Dict[str, Dict[str, Any]] = {}
@@ -123,17 +134,17 @@ def create_room(user_id: str, max_retries: int = 10, domain_enum: int = 1) -> st
                         ROOM_PUBLIC.append(room_code)
                     # 创建者自动加入房间
                     join_room(user_id, room_code)
-                    
+
                     # 记录业务事件
                     log_business_event("create_room", user_id, room_code, {"domain": room_domain})
-                    
+
                     return room_code
-        
+
         # 重试次数用尽
         error_msg = f"无法生成唯一房间码，已重试 {max_retries} 次"
         logger.error(error_msg)
         raise RoomServiceError(error_msg, "ROOM_CODE_GENERATION_FAILED")
-        
+
     except Exception as e:
         log_exception(e, "创建房间失败", {"user_id": user_id, "domain_enum": domain_enum})
         if isinstance(e, RoomServiceError):
@@ -155,10 +166,10 @@ def join_room(user_id: str, room_code: str):
         room = get_room_info(room_code)
         room["members"].add(user_id)
         room["online"].add(user_id)
-        
+
         # 记录业务事件
         log_business_event("join_room", user_id, room_code)
-        
+
     except RoomNotFoundError:
         raise
     except Exception as e:
@@ -179,19 +190,19 @@ def leave_room(user_id: str, room_code: str):
     """
     try:
         room = get_room_info(room_code)
-        
+
         if user_id not in room["members"]:
             raise UserNotInRoomError(user_id, room_code)
-        
+
         try:
             room["online"].remove(user_id)
         except KeyError:
             # 用户不在在线列表中，这是正常的
             pass
-        
+
         # 记录业务事件
         log_business_event("leave_room", user_id, room_code)
-        
+
     except (RoomNotFoundError, UserNotInRoomError):
         raise
     except Exception as e:
@@ -212,10 +223,10 @@ def get_public_room_list() -> list:
                 room_info = ROOM_MANAGER[room_code].copy()
                 room_info["room_code"] = room_code
                 rooms.append(room_info)
-        
+
         # 记录业务事件
         log_business_event("get_public_rooms", details={"count": len(rooms)})
-        
+
         return rooms
     except Exception as e:
         log_exception(e, "获取公共房间列表失败")
@@ -235,11 +246,11 @@ def add_room_message(room_code: str, username: str, message: str) -> dict:
     """
     try:
         room = get_room_info(room_code)
-        
+
         # 检查用户是否在房间中
         if username not in room["members"]:
             raise UserNotInRoomError(username, room_code)
-        
+
         # 添加消息到历史记录
         message_record = {
             "username": username,
@@ -247,25 +258,25 @@ def add_room_message(room_code: str, username: str, message: str) -> dict:
             "timestamp": datetime.now().isoformat(),
             "timestamp_unix": time.time()
         }
-        
+
         room["messages"].append(message_record)
-        
+
         # 限制消息历史数量（最多保留100条）
         if len(room["messages"]) > 100:
             room["messages"] = room["messages"][-100:]
-        
+
         # 记录业务事件
         log_business_event("send_room_message", username, room_code, {
             "message_length": len(message),
             "message_count": len(room["messages"])
         })
-        
+
         return {
             "success": True,
             "message": "消息已添加到房间历史",
             "message_record": message_record
         }
-        
+
     except (RoomNotFoundError, UserNotInRoomError) as e:
         return {"success": False, "message": str(e)}
     except Exception as e:
@@ -285,10 +296,10 @@ def get_room_messages(room_code: str, limit: int = 50) -> dict:
     """
     try:
         room = get_room_info(room_code)
-        
+
         # 获取最新的消息
         messages = room["messages"][-limit:] if limit > 0 else room["messages"]
-        
+
         return {
             "success": True,
             "message": "获取消息历史成功",
@@ -296,7 +307,7 @@ def get_room_messages(room_code: str, limit: int = 50) -> dict:
             "total": len(messages),
             "room_code": room_code
         }
-        
+
     except RoomNotFoundError as e:
         return {"success": False, "message": str(e), "messages": [], "total": 0}
     except Exception as e:
@@ -316,7 +327,7 @@ def get_room_online_users(room_code: str) -> dict:
     try:
         room = get_room_info(room_code)
         online_users = list(room["online"])
-        
+
         return {
             "success": True,
             "message": "获取在线用户列表成功",
@@ -324,7 +335,7 @@ def get_room_online_users(room_code: str) -> dict:
             "total": len(online_users),
             "room_code": room_code
         }
-        
+
     except RoomNotFoundError as e:
         return {"success": False, "message": str(e), "online_users": [], "total": 0}
     except Exception as e:
@@ -344,7 +355,7 @@ def get_room_members(room_code: str) -> dict:
     try:
         room = get_room_info(room_code)
         members = list(room["members"])
-        
+
         return {
             "success": True,
             "message": "获取成员列表成功",
@@ -352,7 +363,7 @@ def get_room_members(room_code: str) -> dict:
             "total": len(members),
             "room_code": room_code
         }
-        
+
     except RoomNotFoundError as e:
         return {"success": False, "message": str(e), "members": [], "total": 0}
     except Exception as e:
@@ -360,8 +371,8 @@ def get_room_members(room_code: str) -> dict:
         return {"success": False, "message": f"获取成员失败: {str(e)}", "members": [], "total": 0}
 
 
-def broadcast_to_room(room_code: str, message_data: Dict[str, Any], 
-                     exclude_user: Optional[str] = None) -> dict:
+def broadcast_to_room(room_code: str, message_data: Dict[str, Any],
+                      exclude_user: Optional[str] = None) -> dict:
     """向房间内所有用户广播消息
     
     Args:
@@ -375,7 +386,7 @@ def broadcast_to_room(room_code: str, message_data: Dict[str, Any],
     try:
         room = get_room_info(room_code)
         online_users = room["online"]
-        
+
         # 记录广播事件
         log_business_event("broadcast_to_room", details={
             "room_code": room_code,
@@ -383,7 +394,7 @@ def broadcast_to_room(room_code: str, message_data: Dict[str, Any],
             "exclude_user": exclude_user,
             "message_type": message_data.get("type", "unknown")
         })
-        
+
         return {
             "success": True,
             "message": "广播消息已发送",
@@ -392,7 +403,7 @@ def broadcast_to_room(room_code: str, message_data: Dict[str, Any],
             "exclude_user": exclude_user,
             "total_recipients": len(online_users) - (1 if exclude_user and exclude_user in online_users else 0)
         }
-        
+
     except RoomNotFoundError as e:
         return {"success": False, "message": str(e)}
     except Exception as e:
@@ -412,38 +423,38 @@ def cleanup_inactive_rooms(max_inactive_time: int = 3600) -> dict:
     try:
         current_time = time.time()
         removed_rooms = []
-        
+
         with room_lock:
             room_codes_to_remove = []
-            
+
             for room_code, room_info in ROOM_MANAGER.items():
                 # 检查房间是否长时间没有活动
                 last_activity = room_info.get("last_activity", room_info.get("created_at", 0))
-                
+
                 # 如果房间没有成员或者长时间没有活动，则清理
-                if (len(room_info["members"]) == 0 or 
-                    current_time - last_activity > max_inactive_time):
+                if (len(room_info["members"]) == 0 or
+                        current_time - last_activity > max_inactive_time):
                     room_codes_to_remove.append(room_code)
-            
+
             # 移除不活跃房间
             for room_code in room_codes_to_remove:
                 if room_code in ROOM_MANAGER:
                     del ROOM_MANAGER[room_code]
-                    
+
                     # 从公共房间列表中移除
                     if room_code in ROOM_PUBLIC:
                         ROOM_PUBLIC.remove(room_code)
-                    
+
                     removed_rooms.append(room_code)
                     logger.info(f"清理不活跃房间: {room_code}")
-        
+
         return {
             "success": True,
             "message": f"清理完成，移除了 {len(removed_rooms)} 个不活跃房间",
             "removed_rooms": removed_rooms,
             "total_removed": len(removed_rooms)
         }
-        
+
     except Exception as e:
         log_exception(e, "清理不活跃房间失败")
         return {"success": False, "message": f"清理失败: {str(e)}", "removed_rooms": [], "total_removed": 0}
