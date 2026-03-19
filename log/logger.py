@@ -1,9 +1,9 @@
 import logging
 import os
 import time
-from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from typing import Dict, Any, Optional, Any
+from logging.handlers import RotatingFileHandler
+from typing import Any
 
 # 获取项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,25 +27,26 @@ if not logger.handlers:
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
     )
-    
+
     # 控制台处理器
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
-    
+
     # 文件处理器（轮转，最大10MB，保留5个备份）
     file_handler = RotatingFileHandler(
         LOG_PATH,
-        maxBytes=10*1024*1024,  # 10MB
+        maxBytes=10 * 1024 * 1024,  # 10MB
         backupCount=5,
         encoding='utf-8'
     )
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
-    
+
     # 添加处理器
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
+
 
 # 自定义异常记录函数
 def log_exception(exception: Exception, context: str = "", extra_info: dict = None):
@@ -59,6 +60,7 @@ def log_exception(exception: Exception, context: str = "", extra_info: dict = No
     extra = f" - {extra_info}" if extra_info else ""
     logger.error(f"{context}: {str(exception)}{extra}", exc_info=True)
 
+
 # 自定义业务日志函数
 def log_business_event(event_type: str, user_id: str = "", room_code: str = "", details: dict = None):
     """记录业务事件
@@ -71,6 +73,7 @@ def log_business_event(event_type: str, user_id: str = "", room_code: str = "", 
     """
     details_str = f" - {details}" if details else ""
     logger.info(f"业务事件 - {event_type} - 用户:{user_id} - 房间:{room_code}{details_str}")
+
 
 # API请求日志函数
 def log_api_request(method: str, path: str, status_code: int = None, client_ip: str = "", duration: float = None):
@@ -86,8 +89,9 @@ def log_api_request(method: str, path: str, status_code: int = None, client_ip: 
     duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
     status_str = f" - 状态:{status_code}" if status_code is not None else ""
     ip_str = f" - IP:{client_ip}" if client_ip else ""
-    
+
     logger.info(f"API请求 - {method} {path}{status_str}{ip_str}{duration_str}")
+
 
 # WebSocket连接日志函数
 def log_websocket_event(event_type: str, client_count: int = None, client_id: str = "", details: str = ""):
@@ -102,8 +106,9 @@ def log_websocket_event(event_type: str, client_count: int = None, client_id: st
     count_str = f" - 当前在线:{client_count}" if client_count is not None else ""
     client_str = f" - 客户端:{client_id}" if client_id else ""
     details_str = f" - {details}" if details else ""
-    
+
     logger.info(f"WebSocket事件 - {event_type}{client_str}{count_str}{details_str}")
+
 
 # 性能监控日志函数
 def log_performance(operation: str, duration: float, size: int = None, user_id: str = ""):
@@ -118,6 +123,7 @@ def log_performance(operation: str, duration: float, size: int = None, user_id: 
     size_str = f" - 大小:{size}" if size is not None else ""
     user_str = f" - 用户:{user_id}" if user_id else ""
     logger.info(f"性能监控 - {operation} - 耗时:{duration:.3f}s{size_str}{user_str}")
+
 
 # SQL执行日志函数
 def log_sql_execution(sql: str, params: Any = None, duration: float = None, success: bool = True, error: str = ""):
@@ -134,11 +140,12 @@ def log_sql_execution(sql: str, params: Any = None, duration: float = None, succ
     duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
     params_str = f" - 参数:{params}" if params else ""
     error_str = f" - 错误:{error}" if error else ""
-    
+
     # 简化SQL显示，避免日志过长
     sql_short = sql[:100] + "..." if len(sql) > 100 else sql
-    
+
     logger.info(f"SQL执行 - {status} - {sql_short}{params_str}{duration_str}{error_str}")
+
 
 # API响应日志函数
 def log_api_response(method: str, path: str, status_code: int, response_size: int = None, duration: float = None):
@@ -153,8 +160,9 @@ def log_api_response(method: str, path: str, status_code: int, response_size: in
     """
     size_str = f" - 响应大小:{response_size}字节" if response_size is not None else ""
     duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
-    
+
     logger.info(f"API响应 - {method} {path} - 状态:{status_code}{size_str}{duration_str}")
+
 
 # 全局系统日志函数
 def log_system_event(event_type: str, component: str = "", details: str = "", level: str = "INFO"):
@@ -168,9 +176,10 @@ def log_system_event(event_type: str, component: str = "", details: str = "", le
     """
     component_str = f" - 组件:{component}" if component else ""
     details_str = f" - {details}" if details else ""
-    
+
     log_method = getattr(logger, level.lower(), logger.info)
     log_method(f"系统事件 - {event_type}{component_str}{details_str}")
+
 
 # 数据库连接日志函数
 def log_database_connection(event: str, database: str = "", details: str = "", success: bool = True):
@@ -185,20 +194,21 @@ def log_database_connection(event: str, database: str = "", details: str = "", s
     status = "成功" if success else "失败"
     db_str = f" - 数据库:{database}" if database else ""
     details_str = f" - {details}" if details else ""
-    
+
     level = "INFO" if success else "ERROR"
     log_method = getattr(logger, level.lower(), logger.info)
     log_method(f"数据库连接 - {event} - {status}{db_str}{details_str}")
 
+
 # 请求追踪上下文类
 class RequestContext:
     """请求追踪上下文，用于记录请求的完整生命周期"""
-    
+
     def __init__(self, request_id: str = None):
         self.request_id = request_id or f"req_{int(time.time() * 1000)}"
         self.start_time = time.time()
         self.steps = []
-    
+
     def add_step(self, step_name: str, details: str = ""):
         """添加处理步骤"""
         step_time = time.time() - self.start_time
@@ -207,43 +217,45 @@ class RequestContext:
             "time": step_time,
             "details": details
         })
-    
+
     def log_completion(self, success: bool = True, final_details: str = ""):
         """记录请求完成日志"""
         total_time = time.time() - self.start_time
         status = "成功" if success else "失败"
-        
+
         steps_str = "; ".join([f"{s['step']}({s['time']:.3f}s)" for s in self.steps])
-        
-        logger.info(f"请求追踪 - {self.request_id} - {status} - 总耗时:{total_time:.3f}s - 步骤:[{steps_str}] - {final_details}")
+
+        logger.info(
+            f"请求追踪 - {self.request_id} - {status} - 总耗时:{total_time:.3f}s - 步骤:[{steps_str}] - {final_details}")
+
 
 # 全局日志管理器类
 class GlobalLogger:
     """全局日志管理器，提供统一的日志接口"""
-    
+
     @staticmethod
     def startup():
         """记录系统启动日志"""
         log_system_event("startup", "system", "Delta Service 启动", "INFO")
-    
+
     @staticmethod
     def shutdown():
         """记录系统关闭日志"""
         log_system_event("shutdown", "system", "Delta Service 关闭", "INFO")
-    
+
     @staticmethod
     def api_call(method: str, path: str, client_ip: str = ""):
         """记录API调用开始"""
         log_api_request(method, path, None, client_ip)
         return RequestContext()
-    
+
     @staticmethod
     def api_response(context: RequestContext, method: str, path: str, status_code: int, response_size: int = None):
         """记录API响应完成"""
         duration = time.time() - context.start_time
         log_api_response(method, path, status_code, response_size, duration)
         context.log_completion(status_code < 400, f"状态码:{status_code}")
-    
+
     @staticmethod
     def sql_query(sql: str, params: Any = None):
         """记录SQL查询开始"""
@@ -253,28 +265,28 @@ class GlobalLogger:
             "params": params,
             "start_time": start_time
         }
-    
+
     @staticmethod
     def sql_result(context: dict, success: bool = True, error: str = ""):
         """记录SQL查询结果"""
         duration = time.time() - context["start_time"]
         log_sql_execution(context["sql"], context["params"], duration, success, error)
-    
+
     @staticmethod
     def websocket_connect(client_id: str, client_count: int):
         """记录WebSocket连接"""
         log_websocket_event("connect", client_count, client_id)
-    
+
     @staticmethod
     def websocket_disconnect(client_id: str, client_count: int):
         """记录WebSocket断开"""
         log_websocket_event("disconnect", client_count, client_id)
-    
+
     @staticmethod
     def database_connect(database: str, success: bool = True, details: str = ""):
         """记录数据库连接"""
         log_database_connection("connect", database, details, success)
-    
+
     @staticmethod
     def database_disconnect(database: str, success: bool = True, details: str = ""):
         """记录数据库断开"""

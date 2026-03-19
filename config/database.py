@@ -1,6 +1,5 @@
 from tortoise import Tortoise
 
-
 # 数据库配置
 DATABASE_CONFIG = {
     "connections": {
