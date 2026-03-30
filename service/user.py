@@ -5,6 +5,7 @@ import time
 from typing import Dict, List, Optional, Any
 
 from log.logger import logger, log_exception, log_business_event
+from dao.user import UserDao, User  # 添加User模型导入
 
 # 用户数据结构
 USERS_ONLINE: Dict[str, Dict[str, Any]] = {}
@@ -14,6 +15,280 @@ user_lock = threading.Lock()
 
 class UserService:
     """用户服务类"""
+
+    @staticmethod
+    async def create_user(username: str, password: Optional[str] = None) -> Dict[str, Any]:
+        """创建用户
+        
+        Args:
+            username: 用户名
+            password: 密码（可选）
+            
+        Returns:
+            创建结果
+        """
+        try:
+            # 调用数据访问层创建用户
+            user = await UserDao.create_user(username, password)
+            
+            # 记录业务事件
+            log_business_event("user_created", username, details={"action": "创建用户"})
+            
+            return {
+                "success": True,
+                "message": "用户创建成功",
+                "user": {
+                    "id": user.id,
+                    "username": user.username
+                }
+            }
+                
+        except Exception as e:
+            log_exception(e, "创建用户失败", {"username": username})
+            return {
+                "success": False,
+                "message": f"创建用户失败: {str(e)}"
+            }
+
+    @staticmethod
+    async def get_user_by_id(user_id: int) -> Dict[str, Any]:
+        """根据ID获取用户信息
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            用户信息
+        """
+        try:
+            user = await UserDao.get_user_by_id(user_id)
+            
+            if user:
+                return {
+                    "success": True,
+                    "message": "获取用户信息成功",
+                    "user": {
+                        "id": user.id,
+                        "username": user.username,
+                        "created_at": user.created_at,
+                        "updated_at": user.updated_at
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+                
+        except Exception as e:
+            log_exception(e, "获取用户信息失败", {"user_id": user_id})
+            return {
+                "success": False,
+                "message": f"获取用户信息失败: {str(e)}"
+            }
+
+    @staticmethod
+    async def get_user_by_username(username: str) -> Dict[str, Any]:
+        """根据用户名获取用户信息
+        
+        Args:
+            username: 用户名
+            
+        Returns:
+            用户信息
+        """
+        try:
+            user = await UserDao.get_user_by_username(username)
+            
+            if user:
+                return {
+                    "success": True,
+                    "message": "获取用户信息成功",
+                    "user": {
+                        "id": user.id,
+                        "username": user.username,
+                        "created_at": user.created_at,
+                        "updated_at": user.updated_at
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "用户不存在"
+                }
+                
+        except Exception as e:
+            log_exception(e, "获取用户信息失败", {"username": username})
+            return {
+                "success": False,
+                "message": f"获取用户信息失败: {str(e)}"
+            }
+
+    @staticmethod
+    async def update_user(user_id: int, **kwargs) -> Dict[str, Any]:
+        """更新用户信息
+        
+        Args:
+            user_id: 用户ID
+            **kwargs: 更新字段
+            
+        Returns:
+            更新结果
+        """
+        try:
+            user = await UserDao.update_user(user_id, **kwargs)
+            
+            if user:
+                # 记录业务事件
+                log_business_event("user_updated", user.username, details={"action": "更新用户信息", "fields": list(kwargs.keys())})
+                
+                return {
+                    "success": True,
+                    "message": "用户信息更新成功",
+                    "user": {
+                        "id": user.id,
+                        "username": user.username
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "用户不存在或更新失败"
+                }
+                
+        except Exception as e:
+            log_exception(e, "更新用户信息失败", {"user_id": user_id})
+            return {
+                "success": False,
+                "message": f"更新用户信息失败: {str(e)}"
+            }
+
+    @staticmethod
+    async def delete_user(user_id: int) -> Dict[str, Any]:
+        """删除用户
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            删除结果
+        """
+        try:
+            success = await UserDao.delete_user(user_id)
+            
+            if success:
+                # 记录业务事件
+                log_business_event("user_deleted", details={"action": "删除用户", "user_id": user_id})
+                
+                return {
+                    "success": True,
+                    "message": "用户删除成功"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": "用户不存在或删除失败"
+                }
+                
+        except Exception as e:
+            log_exception(e, "删除用户失败", {"user_id": user_id})
+            return {
+                "success": False,
+                "message": f"删除用户失败: {str(e)}"
+            }
+
+    @staticmethod
+    async def list_users(skip: int = 0, limit: int = 100) -> Dict[str, Any]:
+        """获取用户列表
+        
+        Args:
+            skip: 跳过数量
+            limit: 限制数量
+            
+        Returns:
+            用户列表
+        """
+        try:
+            users = await UserDao.list_users(skip, limit)
+            
+            # 转换为字典列表
+            user_list = [
+                {
+                    "id": user.id,
+                    "username": user.username,
+                    "created_at": user.created_at,
+                    "updated_at": user.updated_at
+                }
+                for user in users
+            ]
+            
+            # 获取总用户数（需要额外查询）
+            total_count = await User.filter(deleted=False).count()
+            
+            # 记录业务事件
+            log_business_event("list_users", details={"action": "获取用户列表", "count": len(user_list)})
+            
+            return {
+                "success": True,
+                "message": "获取用户列表成功",
+                "users": user_list,
+                "total": total_count
+            }
+                
+        except Exception as e:
+            log_exception(e, "获取用户列表失败")
+            return {
+                "success": False,
+                "message": f"获取用户列表失败: {str(e)}",
+                "users": [],
+                "total": 0
+            }
+
+    @staticmethod
+    async def login(username: str, password: str) -> Dict[str, Any]:
+        """用户登录
+        
+        Args:
+            username: 用户名
+            password: 密码
+            
+        Returns:
+            登录结果
+        """
+        try:
+            # 调用数据访问层进行登录验证
+            user = await UserDao.login(username, password)
+            
+            if user:
+                # 登录成功，更新用户在线状态
+                await UserService.update_user_activity(username)
+                
+                # 记录业务事件
+                log_business_event("user_login", username, details={"action": "登录成功"})
+                
+                return {
+                    "success": True,
+                    "message": "登录成功",
+                    "user": {
+                        "id": user.id,
+                        "username": user.username
+                    }
+                }
+            else:
+                # 记录登录失败事件
+                log_business_event("user_login_failed", username, details={"action": "登录失败", "reason": "用户名或密码错误"})
+                
+                return {
+                    "success": False,
+                    "message": "用户名或密码错误"
+                }
+                
+        except Exception as e:
+            log_exception(e, "用户登录失败", {"username": username})
+            return {
+                "success": False,
+                "message": f"登录失败: {str(e)}"
+            }
 
     @staticmethod
     async def update_user_activity(username: str) -> bool:
