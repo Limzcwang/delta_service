@@ -80,8 +80,7 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
                 request.method,
                 str(request.url.path),
                 500,  # 内部服务器错误
-                None,
-                duration
+                None
             )
 
             raise
