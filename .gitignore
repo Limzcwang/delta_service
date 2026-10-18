@@ -1,2 +1,10 @@
 /logs/
 /.idea/
+
+# --- 安全加固（2026-10 审计）---
+.env
+.env.*
+!.env.example
+.idea/
+logs/
+*.log
