@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from tortoise.backends.base.client import BaseDBAsyncClient
 
-from .logger import GlobalLogger
+from .logger import GlobalLogger, redact_sql_params
 
 
 class SQLLoggerMiddleware:
@@ -29,7 +29,7 @@ class SQLLoggerMiddleware:
             return await db_client.execute_query(query, params)
 
         # 记录SQL开始执行
-        sql_context = GlobalLogger.sql_query(query, params)
+        sql_context = GlobalLogger.sql_query(query, redact_sql_params(query, params))
 
         try:
             start_time = time.time()
@@ -61,7 +61,7 @@ class SQLLoggerMiddleware:
             return await db_client.execute_inset(query, params)
 
         # 记录SQL开始执行
-        sql_context = GlobalLogger.sql_query(query, params)
+        sql_context = GlobalLogger.sql_query(query, redact_sql_params(query, params))
 
         try:
             start_time = time.time()
@@ -90,7 +90,7 @@ class SQLLoggerMiddleware:
             return await db_client.execute_many(query, params)
 
         # 记录SQL开始执行
-        sql_context = GlobalLogger.sql_query(query, params)
+        sql_context = GlobalLogger.sql_query(query, redact_sql_params(query, params))
 
         try:
             start_time = time.time()
@@ -169,7 +169,7 @@ async def setup_sql_logging_alternative():
             # 重写execute_query方法
             async def logged_execute_query(query: str, params: list):
                 """记录SQL查询执行"""
-                sql_context = GlobalLogger.sql_query(query, params)
+                sql_context = GlobalLogger.sql_query(query, redact_sql_params(query, params))
 
                 try:
                     start_time = time.time()
@@ -189,7 +189,7 @@ async def setup_sql_logging_alternative():
             if original_execute_inset:
                 async def logged_execute_inset(query: str, params: list):
                     """记录SQL插入执行"""
-                    sql_context = GlobalLogger.sql_query(query, params)
+                    sql_context = GlobalLogger.sql_query(query, redact_sql_params(query, params))
 
                     try:
                         start_time = time.time()
@@ -208,7 +208,7 @@ async def setup_sql_logging_alternative():
             if original_execute_many:
                 async def logged_execute_many(query: str, params: list):
                     """记录SQL批量执行"""
-                    sql_context = GlobalLogger.sql_query(query, params)
+                    sql_context = GlobalLogger.sql_query(query, redact_sql_params(query, params))
 
                     try:
                         start_time = time.time()

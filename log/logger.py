@@ -125,6 +125,41 @@ def log_performance(operation: str, duration: float, size: int = None, user_id: 
     logger.info(f"性能监控 - {operation} - 耗时:{duration:.3f}s{size_str}{user_str}")
 
 
+# SQL 参数脱敏 ---------------------------------------------------------------
+# SQL 文本命中这些标记时，绑定参数可能包含明文口令/令牌，必须整体打码。
+_SENSITIVE_SQL_MARKERS = (
+    "password",
+    "passwd",
+    "pwd",
+    "token",
+    "secret",
+    "credential",
+    "api_key",
+    "apikey",
+)
+
+SQL_REDACTED = "***REDACTED***"
+
+
+def redact_sql_params(sql: str, params: Any = None) -> Any:
+    """返回可安全写入日志的 SQL 绑定参数。
+
+    - params 为 None 时返回 None（保持原有“无参数”语义）；
+    - SQL 文本（大小写不敏感）命中 password/passwd/pwd/token/secret/
+      credential/api_key 等敏感标记时，返回 ``"***REDACTED***"``；
+    - 其余情况原样返回 params（不改变调用方数据结构）。
+
+    该函数为纯函数，不依赖日志运行期状态，便于单元测试。
+    """
+    if params is None:
+        return None
+
+    sql_text = sql if isinstance(sql, str) else str(sql)
+    if any(marker in sql_text.lower() for marker in _SENSITIVE_SQL_MARKERS):
+        return SQL_REDACTED
+    return params
+
+
 # SQL执行日志函数
 def log_sql_execution(sql: str, params: Any = None, duration: float = None, success: bool = True, error: str = ""):
     """记录SQL执行日志
@@ -138,7 +173,8 @@ def log_sql_execution(sql: str, params: Any = None, duration: float = None, succ
     """
     status = "成功" if success else "失败"
     duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
-    params_str = f" - 参数:{params}" if params else ""
+    # 统一脱敏：含口令/令牌字段的 SQL 不记录任何绑定参数值。
+    params_str = f" - 参数:{redact_sql_params(sql, params)}" if params else ""
     error_str = f" - 错误:{error}" if error else ""
 
     # 简化SQL显示，避免日志过长
