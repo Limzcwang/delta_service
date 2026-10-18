@@ -1,0 +1,51 @@
+# gitleaks 配置示例（v8.x）
+# 放在仓库根目录，命名为 .gitleaks.toml
+# 本地扫描：gitleaks detect --source . --config .gitleaks.toml --redact -v
+# 仅扫暂存区：gitleaks protect --staged --config .gitleaks.toml --redact -v
+
+title = "delta_service secret scanning"
+
+[extend]
+# 继承 gitleaks 内置规则（AWS / GitHub Token / 私钥 / 通用高熵串等）
+useDefault = true
+
+[[rules]]
+id = "delta-service-db-password"
+description = "源码中出现明文数据库口令"
+regex = '''(?i)(?:mysql|db|database|root)[_-]?(?:password|passwd|pwd)\s*[:=]\s*["'][^"'\s]{6,}["']'''
+tags = ["password", "database"]
+
+[[rules]]
+id = "delta-service-generic-password"
+description = "Python/配置文件中硬编码 password 字段"
+regex = '''(?i)["']?(?:password|passwd|pwd)["']?\s*[:=]\s*["'][^"'${\s][^"'\s]{5,}["']'''
+tags = ["password"]
+
+[[rules]]
+id = "delta-service-public-db-host"
+description = "硬编码生产数据库公网地址"
+regex = '''(?:114\.132\.161\.169|\b\d{1,3}(?:\.\d{1,3}){3}\b:3306)'''
+tags = ["host", "private-info"]
+
+[[rules]]
+id = "tortoise-credentials-block"
+description = "Tortoise ORM credentials 配置块中出现明文凭据"
+regex = '''(?s)['"]credentials['"]\s*:\s*\{.{0,500}?['"]password['"]\s*:\s*['"][^"'${\s][^"']{5,}['"]'''
+tags = ["database"]
+
+[allowlist]
+description = "示例文件、模板、占位符与已有审计报告"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)fixes/''',
+  '''(^|/)安全审计报告\.md$''',
+  '''(^|/)GITHUB_ACTIONS_SETUP\.md$''',
+  '''(^|/)README(?:\.md)?$''',
+]
+regexes = [
+  '''\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}''',
+  '''<[^>]{1,60}>''',
+  '''CHANGE_ME''',
+  '''(?:os\.getenv|os\.environ)''',
+  '''smoke_test_not_a_real_secret''',
+]

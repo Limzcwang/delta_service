@@ -1,18 +1,32 @@
+"""数据库配置：全部来自环境变量，缺任何一个必需变量就启动失败（不提供默认口令）。"""
+import os
+
 from tortoise import Tortoise
 
-# 数据库配置
+
+class DatabaseConfigError(RuntimeError):
+    """数据库配置缺失或非法。"""
+
+
+def _require(name: str) -> str:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        raise DatabaseConfigError(f"缺少必需的环境变量: {name}")
+    return value.strip()
+
+
 DATABASE_CONFIG = {
     "connections": {
         "default": {
             "engine": "tortoise.backends.mysql",
             "credentials": {
-                "host": "114.132.161.169",
-                "port": 3306,
-                "user": "root",
-                "password": "***REMOVED***",
-                "database": "delta_service",
-                "charset": "utf8mb4",
-            }
+                "host": _require("DB_HOST"),
+                "port": int(os.getenv("DB_PORT", "3306")),
+                "user": _require("DB_USER"),
+                "password": _require("DB_PASSWORD"),
+                "database": _require("DB_NAME"),
+                "charset": os.getenv("DB_CHARSET", "utf8mb4"),
+            },
         }
     },
     "apps": {
@@ -22,7 +36,7 @@ DATABASE_CONFIG = {
         }
     },
     "use_tz": False,
-    "timezone": "Asia/Shanghai"
+    "timezone": "Asia/Shanghai",
 }
 
 
