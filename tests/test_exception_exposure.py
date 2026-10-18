@@ -156,7 +156,9 @@ class UserServiceErrorMessagesTests(unittest.IsolatedAsyncioTestCase):
     async def test_login_db_error_hides_details(self):
         secret = "connect failed mysql://root:Pa55w0rd!@host:3306/db"
         with mock.patch.object(
-            user_service.UserDao, "login", new=mock.AsyncMock(side_effect=RuntimeError(secret))
+            user_service.UserDao,
+            "get_user_by_username",
+            new=mock.AsyncMock(side_effect=RuntimeError(secret)),
         ), capture_logger(service_logger) as capture:
             result = await user_service.UserService.login("alice", "Pa55w0rd!")
 

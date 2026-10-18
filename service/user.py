@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any
 
 from log.logger import logger, log_exception, log_business_event
 from dao.user import UserDao, User  # 添加User模型导入
+from security.passwords import hash_password, is_hashed, verify_password
 
 # 用户数据结构
 USERS_ONLINE: Dict[str, Dict[str, Any]] = {}
@@ -28,8 +29,10 @@ class UserService:
             创建结果
         """
         try:
+            # 口令只以哈希形式写库；password 为空（None/""）时保持 None。
+            stored_password = hash_password(password) if password else None
             # 调用数据访问层创建用户
-            user = await UserDao.create_user(username, password)
+            user = await UserDao.create_user(username, stored_password)
             
             # 记录业务事件
             log_business_event("user_created", username, details={"action": "创建用户"})
@@ -136,6 +139,10 @@ class UserService:
             更新结果
         """
         try:
+            # 口令字段必须先哈希，禁止把明文写库（更新其它字段时不受影响）。
+            if kwargs.get("password"):
+                kwargs = dict(kwargs)
+                kwargs["password"] = hash_password(kwargs["password"])
             user = await UserDao.update_user(user_id, **kwargs)
             
             if user:
@@ -256,10 +263,24 @@ class UserService:
             登录结果
         """
         try:
-            # 调用数据访问层进行登录验证
-            user = await UserDao.login(username, password)
-            
-            if user:
+            # 按用户名取用户后再校验口令：不再把明文口令拼进 SQL 等值条件。
+            user = await UserDao.get_user_by_username(username)
+
+            if user is not None and verify_password(password, user.password):
+                # 兼容历史明文口令：登录成功即重哈希写回，后续不再保留明文。
+                if not is_hashed(user.password):
+                    try:
+                        await UserDao.update_user(
+                            user.id, password=hash_password(password)
+                        )
+                    except Exception as rehash_error:
+                        # 重哈希失败不阻断登录，但要留服务端日志；迁移脚本可兜底。
+                        log_exception(
+                            rehash_error,
+                            "登录成功但口令重哈希失败",
+                            {"username": username},
+                        )
+
                 # 登录成功，更新用户在线状态
                 await UserService.update_user_activity(username)
                 
