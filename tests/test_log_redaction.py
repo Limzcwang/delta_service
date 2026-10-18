@@ -158,5 +158,60 @@ class SqlLogExecutionRedactionTests(unittest.TestCase):
                 self.assertNotIn("Pa55w0rd!", message)
 
 
+class SqlLogErrorRedactionTests(unittest.TestCase):
+    """log_sql_execution 的 error 字段也要按敏感标记脱敏。"""
+
+    def test_error_field_redacted_when_sensitive_marker(self):
+        with capture_logger(service_logger) as capture:
+            log_sql_execution(
+                "SELECT 1",
+                None,
+                success=False,
+                error="Access denied for user 'root'@'10.0.0.1' (using password: YES)",
+            )
+
+        message = capture.messages()[0]
+        self.assertIn("错误:***REDACTED***", message)
+        self.assertNotIn("Access denied", message)
+        self.assertNotIn("10.0.0.1", message)
+
+    def test_error_field_redacted_case_insensitive(self):
+        with capture_logger(service_logger) as capture:
+            log_sql_execution("SELECT 1", None, success=False, error="TOKEN expired")
+
+        message = capture.messages()[0]
+        self.assertIn("错误:***REDACTED***", message)
+        self.assertNotIn("TOKEN expired", message)
+
+    def test_error_field_kept_when_no_sensitive_marker(self):
+        with capture_logger(service_logger) as capture:
+            log_sql_execution("SELECT 1", None, success=False, error="Timeout after 30s")
+
+        message = capture.messages()[0]
+        self.assertIn("错误:Timeout after 30s", message)
+        self.assertNotIn("***REDACTED***", message)
+
+    def test_empty_error_keeps_log_format_without_error_segment(self):
+        with capture_logger(service_logger) as capture:
+            log_sql_execution("SELECT 1", None, success=False, error="")
+
+        message = capture.messages()[0]
+        self.assertNotIn("错误:", message)
+        self.assertTrue(message.startswith("SQL执行 - 失败 - SELECT 1"))
+
+    def test_sensitive_sql_params_and_error_are_both_redacted(self):
+        with capture_logger(service_logger) as capture:
+            log_sql_execution(
+                "UPDATE users SET password=%s WHERE id=%s",
+                ["Pa55w0rd!", 7],
+                success=False,
+                error="Duplicate entry for key 'password'",
+            )
+
+        message = capture.messages()[0]
+        self.assertEqual(2, message.count("***REDACTED***"))
+        self.assertNotIn("Pa55w0rd!", message)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -73,8 +73,9 @@ class FakeJSONResponse:
 
 
 def install_tortoise_stub():
-    """让 ``from tortoise.backends.base.client import BaseDBAsyncClient`` 可导入。"""
-    if "tortoise.backends.base.client" in sys.modules:
+    """安装 tortoise 最小替身，让日志中间件与 dao 层可离线导入。"""
+    existing = sys.modules.get("tortoise.backends.base.client")
+    if existing is not None and getattr(existing, "_dsh_stub", False):
         return
 
     tortoise = _replace_module("tortoise")
@@ -86,20 +87,119 @@ def install_tortoise_stub():
         """占位基类。"""
 
     client.BaseDBAsyncClient = BaseDBAsyncClient
+    client._dsh_stub = True
     tortoise.backends = backends
     backends.base = base
     base.client = client
+
+    # dao/user.py 在导入期会用到 fields/models/pydantic_model_creator。
+    fields = _replace_module("tortoise.fields")
+
+    class _StubField:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    for field_name in (
+        "IntField",
+        "CharField",
+        "DatetimeField",
+        "BooleanField",
+        "TextField",
+        "FloatField",
+    ):
+        setattr(fields, field_name, _StubField)
+
+    models = _replace_module("tortoise.models")
+
+    class Model:
+        """占位模型基类。"""
+
+    models.Model = Model
+
+    contrib = _replace_module("tortoise.contrib")
+    pydantic_module = _replace_module("tortoise.contrib.pydantic")
+    pydantic_module.pydantic_model_creator = lambda *args, **kwargs: object
+
+    tortoise.fields = fields
+    tortoise.models = models
+    tortoise.contrib = contrib
+
+
+class _StubRouter:
+    """APIRouter 的最小替身：装饰器原样返回处理函数。"""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def post(self, *args, **kwargs):
+        return self._decorator
+
+    def get(self, *args, **kwargs):
+        return self._decorator
+
+    def put(self, *args, **kwargs):
+        return self._decorator
+
+    def delete(self, *args, **kwargs):
+        return self._decorator
+
+    @staticmethod
+    def _decorator(func):
+        return func
+
+
+class StubHTTPException(Exception):
+    """fastapi.HTTPException 的最小替身，保留 status_code/detail。"""
+
+    def __init__(self, status_code: int = 500, detail=None, headers=None):
+        self.status_code = status_code
+        self.detail = detail
+        self.headers = headers
+        super().__init__(str(detail))
+
+
+class _StubStatus:
+    HTTP_400_BAD_REQUEST = 400
+    HTTP_401_UNAUTHORIZED = 401
+    HTTP_404_NOT_FOUND = 404
+    HTTP_500_INTERNAL_SERVER_ERROR = 500
+
+
+def install_fastapi_stub():
+    """安装 fastapi 最小替身（APIRouter/HTTPException/Request/status）。"""
+    _replace_module(
+        "fastapi",
+        APIRouter=_StubRouter,
+        HTTPException=StubHTTPException,
+        Request=object,
+        status=_StubStatus,
+    )
+
+
+def install_pydantic_stub():
+    """安装 pydantic.BaseModel 最小替身。"""
+
+    class BaseModel:
+        def __init__(self, **data):
+            for key, value in data.items():
+                setattr(self, key, value)
+
+        def dict(self):
+            return dict(self.__dict__)
+
+        def model_dump(self):
+            return self.dict()
+
+    _replace_module("pydantic", BaseModel=BaseModel)
 
 
 def install_main_dependency_stubs():
     """安装 main.py 依赖的第三方/业务模块替身，避免导入时连数据库或网络。"""
     install_tortoise_stub()
-
-    fastapi = sys.modules.get("fastapi")
-    if fastapi is None or not hasattr(fastapi, "Request"):
-        fastapi = _replace_module("fastapi", Request=object)
-    else:
-        setattr(fastapi, "Request", object)
+    install_fastapi_stub()
+    install_pydantic_stub()
 
     responses = sys.modules.get("fastapi.responses")
     if responses is None or not hasattr(responses, "JSONResponse"):

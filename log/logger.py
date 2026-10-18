@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import uuid
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any
@@ -141,6 +142,13 @@ _SENSITIVE_SQL_MARKERS = (
 SQL_REDACTED = "***REDACTED***"
 
 
+def _has_sensitive_marker(text: Any) -> bool:
+    """文本（大小写不敏感）是否命中脱敏标记。"""
+    text_value = text if isinstance(text, str) else str(text)
+    lowered = text_value.lower()
+    return any(marker in lowered for marker in _SENSITIVE_SQL_MARKERS)
+
+
 def redact_sql_params(sql: str, params: Any = None) -> Any:
     """返回可安全写入日志的 SQL 绑定参数。
 
@@ -153,11 +161,32 @@ def redact_sql_params(sql: str, params: Any = None) -> Any:
     """
     if params is None:
         return None
+    return SQL_REDACTED if _has_sensitive_marker(sql) else params
 
-    sql_text = sql if isinstance(sql, str) else str(sql)
-    if any(marker in sql_text.lower() for marker in _SENSITIVE_SQL_MARKERS):
-        return SQL_REDACTED
-    return params
+
+def redact_sensitive_text(text: Any) -> Any:
+    """按与 ``redact_sql_params`` 相同的敏感标记脱敏自由文本。
+
+    用于 SQL 执行失败时的 ``error`` 字段：数据库异常文本可能包含
+    host/user/库名/口令提示，命中敏感标记时整体替换为 ``SQL_REDACTED``；
+    未命中则原样保留，避免影响日常排障。
+    """
+    if text is None:
+        return None
+    return SQL_REDACTED if _has_sensitive_marker(text) else text
+
+
+def resolve_request_id(request: Any = None) -> str:
+    """获取请求的 request_id；没有则生成一个。
+
+    优先复用 APILoggingMiddleware 写入 ``request.state.request_id`` 的值，
+    使服务端日志、错误响应与“请求追踪”日志可以互相对账；对不经过中间件的
+    调用（测试、内部任务）兜底生成 ``req_<12 位 hex>``。
+    """
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    if request_id:
+        return str(request_id)
+    return f"req_{uuid.uuid4().hex[:12]}"
 
 
 # SQL执行日志函数
@@ -175,7 +204,8 @@ def log_sql_execution(sql: str, params: Any = None, duration: float = None, succ
     duration_str = f" - 耗时:{duration:.3f}s" if duration is not None else ""
     # 统一脱敏：含口令/令牌字段的 SQL 不记录任何绑定参数值。
     params_str = f" - 参数:{redact_sql_params(sql, params)}" if params else ""
-    error_str = f" - 错误:{error}" if error else ""
+    # 数据库异常文本也可能带 host/user/口令提示，按同一敏感标记判断后再落盘。
+    error_str = f" - 错误:{redact_sensitive_text(error)}" if error else ""
 
     # 简化SQL显示，避免日志过长
     sql_short = sql[:100] + "..." if len(sql) > 100 else sql

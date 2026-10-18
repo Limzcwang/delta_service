@@ -7,6 +7,29 @@ from service.user import UserService
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
+# 只允许透传这些面向用户的领域文案。服务层若把异常原文拼进 message
+# （历史写法如 "创建用户失败: {str(e)}"），一律回退为通用文案，
+# 完整异常已经由服务层 log_exception 记录到服务端日志。
+_SAFE_SERVICE_MESSAGES = frozenset({
+    "创建用户失败",
+    "获取用户信息失败",
+    "更新用户信息失败",
+    "删除用户失败",
+    "获取用户列表失败",
+    "登录失败",
+    "用户不存在",
+    "用户不存在或更新失败",
+    "用户不存在或删除失败",
+    "用户名或密码错误",
+})
+
+
+def _client_error_message(message: Optional[str], fallback: str) -> str:
+    """把服务层 message 收敛为可安全回传客户端的文案。"""
+    if isinstance(message, str) and message in _SAFE_SERVICE_MESSAGES:
+        return message
+    return fallback
+
 
 class CreateUserRequest(BaseModel):
     """创建用户请求模型"""
@@ -70,7 +93,7 @@ async def create_user(request: CreateUserRequest):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "创建用户失败")
         )
 
     return {
@@ -88,7 +111,7 @@ async def get_user_by_id(user_id: int):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "获取用户信息失败")
         )
 
     return {
@@ -106,7 +129,7 @@ async def get_user_by_username(username: str):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "获取用户信息失败")
         )
 
     return {
@@ -127,7 +150,7 @@ async def update_user(user_id: int, request: UpdateUserRequest):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "更新用户信息失败")
         )
 
     return {
@@ -145,7 +168,7 @@ async def delete_user(user_id: int):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "删除用户失败")
         )
 
     return {
@@ -175,7 +198,7 @@ async def login(request: LoginRequest):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "登录失败")
         )
 
     return {
@@ -193,7 +216,7 @@ async def list_users(skip: int = 0, limit: int = 100):
     if not result["success"]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=result["message"]
+            detail=_client_error_message(result.get("message"), "获取用户列表失败")
         )
 
     return {
