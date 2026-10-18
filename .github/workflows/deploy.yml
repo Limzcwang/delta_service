@@ -48,7 +48,7 @@ jobs:
           # 国内镜像源预拉基础镜像（本机/内网 mirror），避免 Docker Hub 不可达
           docker pull mirror.ccs.tencentyun.com/library/python:3.11-slim || true
           docker tag mirror.ccs.tencentyun.com/library/python:3.11-slim python:3.11-slim || true
-          # 不用 docker-build-optimize.sh：它会改 daemon.json 并重启整个 Docker（连累其它容器），且依赖 buildx
+          # 不要用会改 daemon.json 并重启整个 Docker 的构建脚本（原 docker-build-optimize.sh 已删除）
           docker build -t delta-service .
           echo "✅ 镜像构建完成"
 
