@@ -1,0 +1,227 @@
+"""离线单元测试辅助：为仓库运行期依赖安装最小 stub。
+
+仓库本身未安装 fastapi / tortoise 等第三方依赖时，测试也必须能跑通，
+因此这里用 ``sys.modules`` 注入最小替身，只保留被测试代码实际会用到的名字。
+"""
+
+import importlib.util
+import json
+import logging
+import sys
+import types
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class RecordingHandler(logging.Handler):
+    """把日志记录收集到内存，避免测试写 logs/ 或污染控制台。"""
+
+    def __init__(self):
+        super().__init__()
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+    def messages(self):
+        return [record.getMessage() for record in self.records]
+
+
+class capture_logger:
+    """上下文管理器：临时替换指定 logger 的 handler/level/propagate 并收集日志。"""
+
+    def __init__(self, target_logger: logging.Logger):
+        self.logger = target_logger
+        self.handler = RecordingHandler()
+        self._original_handlers = None
+        self._original_level = None
+        self._original_propagate = None
+
+    def __enter__(self):
+        self._original_handlers = self.logger.handlers[:]
+        self._original_level = self.logger.level
+        self._original_propagate = self.logger.propagate
+        self.logger.handlers = [self.handler]
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
+        return self.handler
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.logger.handlers = self._original_handlers
+        self.logger.setLevel(self._original_level)
+        self.logger.propagate = self._original_propagate
+        return False
+
+
+def _replace_module(name, **attrs):
+    """安装（或覆盖）一个最小模块并返回它。"""
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    sys.modules[name] = module
+    return module
+
+
+class FakeJSONResponse:
+    """fastapi.responses.JSONResponse 的最小替身。"""
+
+    def __init__(self, status_code: int = 200, content=None, **kwargs):
+        self.status_code = status_code
+        self.content = content
+        self.body = json.dumps(content, ensure_ascii=False).encode("utf-8")
+
+
+def install_tortoise_stub():
+    """安装 tortoise 最小替身，让日志中间件与 dao 层可离线导入。"""
+    existing = sys.modules.get("tortoise.backends.base.client")
+    if existing is not None and getattr(existing, "_dsh_stub", False):
+        return
+
+    tortoise = _replace_module("tortoise")
+    backends = _replace_module("tortoise.backends")
+    base = _replace_module("tortoise.backends.base")
+    client = _replace_module("tortoise.backends.base.client")
+
+    class BaseDBAsyncClient:
+        """占位基类。"""
+
+    client.BaseDBAsyncClient = BaseDBAsyncClient
+    client._dsh_stub = True
+    tortoise.backends = backends
+    backends.base = base
+    base.client = client
+
+    # dao/user.py 在导入期会用到 fields/models/pydantic_model_creator。
+    fields = _replace_module("tortoise.fields")
+
+    class _StubField:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    for field_name in (
+        "IntField",
+        "CharField",
+        "DatetimeField",
+        "BooleanField",
+        "TextField",
+        "FloatField",
+    ):
+        setattr(fields, field_name, _StubField)
+
+    models = _replace_module("tortoise.models")
+
+    class Model:
+        """占位模型基类。"""
+
+    models.Model = Model
+
+    contrib = _replace_module("tortoise.contrib")
+    pydantic_module = _replace_module("tortoise.contrib.pydantic")
+    pydantic_module.pydantic_model_creator = lambda *args, **kwargs: object
+
+    tortoise.fields = fields
+    tortoise.models = models
+    tortoise.contrib = contrib
+
+
+class _StubRouter:
+    """APIRouter 的最小替身：装饰器原样返回处理函数。"""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def post(self, *args, **kwargs):
+        return self._decorator
+
+    def get(self, *args, **kwargs):
+        return self._decorator
+
+    def put(self, *args, **kwargs):
+        return self._decorator
+
+    def delete(self, *args, **kwargs):
+        return self._decorator
+
+    @staticmethod
+    def _decorator(func):
+        return func
+
+
+class StubHTTPException(Exception):
+    """fastapi.HTTPException 的最小替身，保留 status_code/detail。"""
+
+    def __init__(self, status_code: int = 500, detail=None, headers=None):
+        self.status_code = status_code
+        self.detail = detail
+        self.headers = headers
+        super().__init__(str(detail))
+
+
+class _StubStatus:
+    HTTP_400_BAD_REQUEST = 400
+    HTTP_401_UNAUTHORIZED = 401
+    HTTP_404_NOT_FOUND = 404
+    HTTP_500_INTERNAL_SERVER_ERROR = 500
+
+
+def install_fastapi_stub():
+    """安装 fastapi 最小替身（APIRouter/HTTPException/Request/status）。"""
+    _replace_module(
+        "fastapi",
+        APIRouter=_StubRouter,
+        HTTPException=StubHTTPException,
+        Request=object,
+        status=_StubStatus,
+    )
+
+
+def install_pydantic_stub():
+    """安装 pydantic.BaseModel 最小替身。"""
+
+    class BaseModel:
+        def __init__(self, **data):
+            for key, value in data.items():
+                setattr(self, key, value)
+
+        def dict(self):
+            return dict(self.__dict__)
+
+        def model_dump(self):
+            return self.dict()
+
+    _replace_module("pydantic", BaseModel=BaseModel)
+
+
+def install_main_dependency_stubs():
+    """安装 main.py 依赖的第三方/业务模块替身，避免导入时连数据库或网络。"""
+    install_tortoise_stub()
+    install_fastapi_stub()
+    install_pydantic_stub()
+
+    responses = sys.modules.get("fastapi.responses")
+    if responses is None or not hasattr(responses, "JSONResponse"):
+        _replace_module("fastapi.responses", JSONResponse=FakeJSONResponse)
+    else:
+        setattr(responses, "JSONResponse", FakeJSONResponse)
+
+    _replace_module("uvicorn", Config=object, Server=object)
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    _replace_module("api.init", create_app=lambda *a, **k: None)
+    _replace_module("config.database", init_database=_noop, close_database=_noop)
+    _replace_module("websocket", websocket_manager=object())
+
+
+def load_main_module(name="main_under_test"):
+    """加载仓库根目录的 main.py（不执行 ``if __name__ == '__main__'`` 分支）。"""
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "main.py")
+    if spec is None or spec.loader is None:  # pragma: no cover - 环境异常时给出明确错误
+        raise RuntimeError("无法加载 main.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module

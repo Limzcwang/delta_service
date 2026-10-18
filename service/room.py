@@ -47,6 +47,16 @@ class InvalidDomainError(RoomServiceError):
         super().__init__(f"无效的房间领域: {domain_enum}", "INVALID_DOMAIN")
 
 
+def _log_service_failure(exception: Exception, action: str, extra_info: dict = None, request_id: str = None) -> None:
+    """记录服务层未预期异常（只进服务端日志）。
+
+    request_id 用于与 API 错误响应/请求追踪日志对账；没有上下文时记 "-"。
+    """
+    info = dict(extra_info or {})
+    info["request_id"] = request_id
+    log_exception(exception, f"{action} - request_id:{request_id or '-'}", info)
+
+
 # 房间管理
 ROOM_MANAGER: Dict[str, Dict[str, Any]] = {}
 # 公共房间
@@ -99,13 +109,14 @@ def get_room_domain_enum(domain_enum: int) -> str:
         raise InvalidDomainError(domain_enum)
 
 
-def create_room(user_id: str, max_retries: int = 10, domain_enum: int = 1) -> str:
+def create_room(user_id: str, max_retries: int = 10, domain_enum: int = 1, request_id: str = None) -> str:
     """创建房间（线程安全）
 
     Args:
         user_id: 创建者用户ID
         max_retries: 最大重试次数，防止无限循环
         domain_enum: 房间领域枚举
+        request_id: 请求追踪 ID（可选，仅用于服务端日志对账）
     
     Returns:
         生成的房间码
@@ -133,7 +144,7 @@ def create_room(user_id: str, max_retries: int = 10, domain_enum: int = 1) -> st
                     if domain_enum == 1:  # 公共房间
                         ROOM_PUBLIC.append(room_code)
                     # 创建者自动加入房间
-                    join_room(user_id, room_code)
+                    join_room(user_id, room_code, request_id=request_id)
 
                     # 记录业务事件
                     log_business_event("create_room", user_id, room_code, {"domain": room_domain})
@@ -146,18 +157,25 @@ def create_room(user_id: str, max_retries: int = 10, domain_enum: int = 1) -> st
         raise RoomServiceError(error_msg, "ROOM_CODE_GENERATION_FAILED")
 
     except Exception as e:
-        log_exception(e, "创建房间失败", {"user_id": user_id, "domain_enum": domain_enum})
+        _log_service_failure(
+            e,
+            "创建房间失败",
+            {"user_id": user_id, "domain_enum": domain_enum},
+            request_id,
+        )
         if isinstance(e, RoomServiceError):
             raise
-        raise RoomServiceError(f"创建房间失败: {str(e)}", "CREATE_ROOM_FAILED")
+        # 对外只给通用文案；原始异常（可能含连接串/SQL/路径）只在上面的日志里。
+        raise RoomServiceError("创建房间失败", "CREATE_ROOM_FAILED")
 
 
-def join_room(user_id: str, room_code: str):
+def join_room(user_id: str, room_code: str, request_id: str = None):
     """加入房间
     
     Args:
         user_id: 用户ID
         room_code: 房间码
+        request_id: 请求追踪 ID（可选，仅用于服务端日志对账）
     
     Raises:
         RoomNotFoundError: 房间不存在时抛出
@@ -173,16 +191,23 @@ def join_room(user_id: str, room_code: str):
     except RoomNotFoundError:
         raise
     except Exception as e:
-        log_exception(e, "加入房间失败", {"user_id": user_id, "room_code": room_code})
-        raise RoomServiceError(f"加入房间失败: {str(e)}", "JOIN_ROOM_FAILED")
+        _log_service_failure(
+            e,
+            "加入房间失败",
+            {"user_id": user_id, "room_code": room_code},
+            request_id,
+        )
+        # 对外只给通用文案；原始异常只进服务端日志。
+        raise RoomServiceError("加入房间失败", "JOIN_ROOM_FAILED")
 
 
-def leave_room(user_id: str, room_code: str):
+def leave_room(user_id: str, room_code: str, request_id: str = None):
     """离开房间
     
     Args:
         user_id: 用户ID
         room_code: 房间码
+        request_id: 请求追踪 ID（可选，仅用于服务端日志对账）
     
     Raises:
         RoomNotFoundError: 房间不存在时抛出
@@ -206,13 +231,22 @@ def leave_room(user_id: str, room_code: str):
     except (RoomNotFoundError, UserNotInRoomError):
         raise
     except Exception as e:
-        log_exception(e, "离开房间失败", {"user_id": user_id, "room_code": room_code})
-        raise RoomServiceError(f"离开房间失败: {str(e)}", "LEAVE_ROOM_FAILED")
+        _log_service_failure(
+            e,
+            "离开房间失败",
+            {"user_id": user_id, "room_code": room_code},
+            request_id,
+        )
+        # 对外只给通用文案；原始异常只进服务端日志。
+        raise RoomServiceError("离开房间失败", "LEAVE_ROOM_FAILED")
 
 
-def get_public_room_list() -> list:
+def get_public_room_list(request_id: str = None) -> list:
     """获取公共房间列表
-    
+
+    Args:
+        request_id: 请求追踪 ID（可选，仅用于服务端日志对账）
+
     Returns:
         公共房间信息列表
     """
@@ -229,8 +263,9 @@ def get_public_room_list() -> list:
 
         return rooms
     except Exception as e:
-        log_exception(e, "获取公共房间列表失败")
-        raise RoomServiceError(f"获取公共房间列表失败: {str(e)}", "GET_PUBLIC_ROOMS_FAILED")
+        _log_service_failure(e, "获取公共房间列表失败", None, request_id)
+        # 对外只给通用文案；原始异常只进服务端日志。
+        raise RoomServiceError("获取公共房间列表失败", "GET_PUBLIC_ROOMS_FAILED")
 
 
 def add_room_message(room_code: str, username: str, message: str) -> dict:

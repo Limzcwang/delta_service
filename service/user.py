@@ -47,7 +47,7 @@ class UserService:
             log_exception(e, "创建用户失败", {"username": username})
             return {
                 "success": False,
-                "message": f"创建用户失败: {str(e)}"
+                "message": "创建用户失败"
             }
 
     @staticmethod
@@ -84,7 +84,7 @@ class UserService:
             log_exception(e, "获取用户信息失败", {"user_id": user_id})
             return {
                 "success": False,
-                "message": f"获取用户信息失败: {str(e)}"
+                "message": "获取用户信息失败"
             }
 
     @staticmethod
@@ -121,7 +121,7 @@ class UserService:
             log_exception(e, "获取用户信息失败", {"username": username})
             return {
                 "success": False,
-                "message": f"获取用户信息失败: {str(e)}"
+                "message": "获取用户信息失败"
             }
 
     @staticmethod
@@ -160,7 +160,7 @@ class UserService:
             log_exception(e, "更新用户信息失败", {"user_id": user_id})
             return {
                 "success": False,
-                "message": f"更新用户信息失败: {str(e)}"
+                "message": "更新用户信息失败"
             }
 
     @staticmethod
@@ -194,7 +194,7 @@ class UserService:
             log_exception(e, "删除用户失败", {"user_id": user_id})
             return {
                 "success": False,
-                "message": f"删除用户失败: {str(e)}"
+                "message": "删除用户失败"
             }
 
     @staticmethod
@@ -239,7 +239,7 @@ class UserService:
             log_exception(e, "获取用户列表失败")
             return {
                 "success": False,
-                "message": f"获取用户列表失败: {str(e)}",
+                "message": "获取用户列表失败",
                 "users": [],
                 "total": 0
             }
@@ -287,7 +287,7 @@ class UserService:
             log_exception(e, "用户登录失败", {"username": username})
             return {
                 "success": False,
-                "message": f"登录失败: {str(e)}"
+                "message": "登录失败"
             }
 
     @staticmethod
@@ -416,7 +416,7 @@ class UserService:
             log_exception(e, "检查用户在线状态失败", {"username": username})
             return {
                 "online": False,
-                "message": f"检查失败: {str(e)}",
+                "message": "检查失败",
                 "username": username
             }
 
@@ -516,7 +516,7 @@ class UserService:
             log_exception(e, "检查不活跃用户失败")
             return {
                 "success": False,
-                "message": f"检查失败: {str(e)}",
+                "message": "检查失败",
                 "removed_users": [],
                 "total_removed": 0
             }

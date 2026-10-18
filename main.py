@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from api.init import create_app
 from config.database import init_database, close_database
-from log.logger import logger, log_exception, GlobalLogger
+from log.logger import GlobalLogger, log_exception, logger, resolve_request_id
 from log.sql_logger import init_sql_logging
 from websocket import (
     websocket_manager
@@ -15,21 +15,31 @@ from websocket import (
 
 # 全局异常处理器
 async def global_exception_handler(request: Request, exc: Exception):
-    """全局异常处理中间件"""
-    # 记录异常
-    log_exception(exc, "全局异常处理", {
-        "path": request.url.path,
-        "method": request.method,
-        "client_ip": request.client.host if request.client else "unknown"
-    })
+    """全局异常处理中间件
 
-    # 返回标准化的错误响应
+    安全约定：客户端只拿到通用错误结构和 request_id；异常类型、消息与
+    traceback 只写服务端日志（通过 request_id 检索对账）。
+    """
+    request_id = resolve_request_id(request)
+
+    # 完整异常（type + message + traceback）只记录到服务端日志。
+    log_exception(
+        exc,
+        f"全局异常处理 - {type(exc).__name__} - request_id:{request_id}",
+        {
+            "path": request.url.path,
+            "method": request.method,
+            "client_ip": request.client.host if request.client else "unknown",
+        },
+    )
+
+    # 返回标准化的错误响应：不含异常详情、连接串、SQL、堆栈等内部信息。
     return JSONResponse(
         status_code=500,
         content={
-            "error_code": "INTERNAL_SERVER_ERROR",
+            "code": 500,
             "message": "服务器内部错误",
-            "detail": str(exc)
+            "request_id": request_id,
         }
     )
 

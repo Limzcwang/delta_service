@@ -42,6 +42,10 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
             client_ip=request.client.host if request.client else "unknown"
         )
 
+        # 把 request_id 暴露给后续处理器（如全局异常处理器），
+        # 使错误响应里的 request_id 与这里的“请求追踪”日志可以互相对账。
+        request.state.request_id = request_context.request_id
+
         # 记录请求开始
         request_context.add_step("请求接收", f"方法:{request.method} 路径:{request.url.path}")
 
