@@ -31,6 +31,19 @@ def _client_error_message(message: Optional[str], fallback: str) -> str:
     return fallback
 
 
+# 对外用户字段白名单：即使服务层/模型将来多返回字段，API 也不会把 password 带出去。
+_PUBLIC_USER_FIELDS = ("id", "username", "created_at", "updated_at")
+
+
+def _public_user(user):
+    """把用户对象/字典收敛为对外可公开字段（显式排除 password）。"""
+    if user is None:
+        return None
+    if isinstance(user, dict):
+        return {key: user[key] for key in _PUBLIC_USER_FIELDS if key in user}
+    return {key: getattr(user, key) for key in _PUBLIC_USER_FIELDS if hasattr(user, key)}
+
+
 class CreateUserRequest(BaseModel):
     """创建用户请求模型"""
     username: str
@@ -99,7 +112,7 @@ async def create_user(request: CreateUserRequest):
     return {
         "code": 200,
         "message": result["message"],
-        "data": result["user"]
+        "data": _public_user(result["user"])
     }
 
 
@@ -117,7 +130,7 @@ async def get_user_by_id(user_id: int):
     return {
         "code": 200,
         "message": result["message"],
-        "data": result["user"]
+        "data": _public_user(result["user"])
     }
 
 
@@ -135,7 +148,7 @@ async def get_user_by_username(username: str):
     return {
         "code": 200,
         "message": result["message"],
-        "data": result["user"]
+        "data": _public_user(result["user"])
     }
 
 
@@ -156,7 +169,7 @@ async def update_user(user_id: int, request: UpdateUserRequest):
     return {
         "code": 200,
         "message": result["message"],
-        "data": result.get("user")
+        "data": _public_user(result.get("user"))
     }
 
 
@@ -204,7 +217,7 @@ async def login(request: LoginRequest):
     return {
         "code": 200,
         "message": result["message"],
-        "data": result["user"]
+        "data": _public_user(result["user"])
     }
 
 
@@ -223,7 +236,7 @@ async def list_users(skip: int = 0, limit: int = 100):
         "code": 200,
         "message": result["message"],
         "data": {
-            "users": result["users"],
+            "users": [_public_user(user) for user in result["users"]],
             "total": result["total"]
         }
     }
