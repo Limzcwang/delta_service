@@ -115,7 +115,11 @@ async def create_room_api(request: Request, create_request: CreateRoomRequest):
         # 记录API请求
         client_ip = request.client.host if request.client else "unknown"
 
-        room_code = create_room(create_request.user_id, domain_enum=create_request.domain_enum)
+        room_code = create_room(
+            create_request.user_id,
+            domain_enum=create_request.domain_enum,
+            request_id=resolve_request_id(request),
+        )
 
         # 记录成功请求
         duration = time.time() - start_time
@@ -161,7 +165,11 @@ async def join_room_api(request: Request, join_request: JoinRoomRequest):
     try:
         client_ip = request.client.host if request.client else "unknown"
 
-        join_room(join_request.user_id, join_request.room_code)
+        join_room(
+            join_request.user_id,
+            join_request.room_code,
+            request_id=resolve_request_id(request),
+        )
         room_info = get_room_info(join_request.room_code)
 
         duration = time.time() - start_time
@@ -213,7 +221,11 @@ async def leave_room_api(request: Request, leave_request: JoinRoomRequest):
     try:
         client_ip = request.client.host if request.client else "unknown"
 
-        leave_room(leave_request.user_id, leave_request.room_code)
+        leave_room(
+            leave_request.user_id,
+            leave_request.room_code,
+            request_id=resolve_request_id(request),
+        )
 
         duration = time.time() - start_time
         log_api_request("POST", "/api/room/leave", 200, client_ip, duration)
@@ -297,7 +309,7 @@ async def get_public_room_list_api(request: Request):
     try:
         client_ip = request.client.host if request.client else "unknown"
 
-        rooms = get_public_room_list()
+        rooms = get_public_room_list(request_id=resolve_request_id(request))
         room_responses = []
         for room_info in rooms:
             room_responses.append(RoomInfoResponse(
