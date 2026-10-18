@@ -19,8 +19,10 @@
 3. **SERVER_USER** - 服务器用户名
    - 示例：`root` 或 `ubuntu`
 
-4. **SSH_PRIVATE_KEY** - SSH私钥
-   - 获取方法：`cat ~/.ssh/id_rsa`（服务器上的私钥内容）
+4. **SSH_PRIVATE_KEY** - 部署专用私钥（不要用个人主私钥）
+   - 生成：`ssh-keygen -t ed25519 -C "github-actions@delta-service" -f delta_deploy_key`
+   - 私钥粘贴到 Secrets；公钥写入服务器 `authorized_keys` 并加 `from=` / `command=` 限制
+   - 禁止导出个人 `~/.ssh/id_rsa`；部署密钥定期轮换
 
 ### 配置步骤
 
