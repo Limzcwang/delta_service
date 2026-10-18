@@ -1,0 +1,16 @@
+# 安全：不要把凭据、日志、IDE 配置打进镜像层
+.git
+.github
+.idea
+.vscode
+.env
+.env.*
+!.env.example
+logs
+*.log
+__pycache__/
+*.py[cod]
+.venv
+venv/
+*.tgz
+*.tar.gz
