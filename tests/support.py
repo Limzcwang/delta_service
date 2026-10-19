@@ -4,10 +4,14 @@
 因此这里用 ``sys.modules`` 注入最小替身，只保留被测试代码实际会用到的名字。
 """
 
+import base64
+import hashlib
+import hmac
 import importlib.util
 import json
 import logging
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -236,3 +240,85 @@ def load_main_module(name="main_under_test"):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(text: str) -> bytes:
+    padding = "=" * (-len(text) % 4)
+    return base64.urlsafe_b64decode(text + padding)
+
+
+def install_jwt_stub():
+    """未安装 PyJWT 时提供最小 HS256 替身（仅测试用）。
+
+    stub 实现了 PyJWT 2.x 中本仓库用到的子集：``encode``/``decode``、
+    ``InvalidTokenError``/``ExpiredSignatureError``/``InvalidSignatureError``/
+    ``DecodeError``，足以离线验证签名、过期与 claims 校验逻辑。已安装真实
+    PyJWT 时什么都不做。
+    """
+    try:
+        import jwt  # noqa: F401  # 真实依赖存在时直接使用
+        return
+    except ImportError:
+        pass
+
+    module = types.ModuleType("jwt")
+
+    class InvalidTokenError(Exception):
+        pass
+
+    class DecodeError(InvalidTokenError):
+        pass
+
+    class InvalidSignatureError(DecodeError):
+        pass
+
+    class ExpiredSignatureError(InvalidTokenError):
+        pass
+
+    def encode(payload, key, algorithm="HS256", **kwargs):
+        if algorithm != "HS256":
+            raise InvalidTokenError("stub 仅支持 HS256")
+        header = _b64url_encode(json.dumps({"alg": algorithm, "typ": "JWT"}, separators=(",", ":")).encode())
+        body = _b64url_encode(json.dumps(payload, separators=(",", ":"), default=str).encode())
+        signing_input = f"{header}.{body}".encode("ascii")
+        signature = hmac.new(str(key).encode("utf-8"), signing_input, hashlib.sha256).digest()
+        return f"{header}.{body}.{_b64url_encode(signature)}"
+
+    def decode(token, key, algorithms=None, options=None, **kwargs):
+        options = options or {}
+        try:
+            header_b64, body_b64, signature_b64 = str(token).split(".")
+            header = json.loads(_b64url_decode(header_b64))
+            payload = json.loads(_b64url_decode(body_b64))
+            signature = _b64url_decode(signature_b64)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise DecodeError("token 格式错误") from exc
+
+        if header.get("alg") != "HS256":
+            raise InvalidTokenError("不支持的算法")
+        expected = hmac.new(
+            str(key).encode("utf-8"), f"{header_b64}.{body_b64}".encode("ascii"), hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise InvalidSignatureError("签名不匹配")
+        if algorithms is not None and header.get("alg") not in algorithms:
+            raise InvalidTokenError("算法不被允许")
+        for claim in options.get("require", ()):
+            if claim not in payload:
+                raise InvalidTokenError(f"缺少 claim: {claim}")
+        if options.get("verify_exp", True) and isinstance(payload.get("exp"), (int, float)):
+            if time.time() >= payload["exp"]:
+                raise ExpiredSignatureError("token 已过期")
+        return payload
+
+    module.encode = encode
+    module.decode = decode
+    module.InvalidTokenError = InvalidTokenError
+    module.DecodeError = DecodeError
+    module.InvalidSignatureError = InvalidSignatureError
+    module.ExpiredSignatureError = ExpiredSignatureError
+    sys.modules["jwt"] = module
