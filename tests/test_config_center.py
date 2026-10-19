@@ -29,6 +29,19 @@ from service.config_center import (  # noqa: E402
 )
 
 
+def operator(op_id="op-1", name="干员A"):
+    return {
+        "id": op_id,
+        "name": name,
+        "avatar": f"assets/operators/{op_id}.png",
+        "skills": [
+            {"slot": 0, "name": "大招", "total_cd_ms": 90000, "max_charges": 1},
+            {"slot": 1, "name": "技能", "total_cd_ms": 45000, "max_charges": 2},
+            {"slot": 2, "name": "投掷物", "total_cd_ms": 50000, "max_charges": 2},
+        ],
+    }
+
+
 def write_config(path: Path, operators, meta=None):
     payload = {"operators": operators, "_meta": meta or {"schema": 1}}
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -53,7 +66,7 @@ class ConfigCenterLoadTests(unittest.TestCase):
     def test_load_version_and_etag(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "operators.json"
-            raw = write_config(path, [{"id": "op-1", "name": "干员A"}])
+            raw = write_config(path, [operator()])
             center = OperatorConfigCenter(str(path)).load()
             expected = hashlib.sha256(raw).hexdigest()[:16]
 
@@ -62,16 +75,30 @@ class ConfigCenterLoadTests(unittest.TestCase):
             payload = center.get()
             self.assertEqual(expected, payload["version"])
             self.assertEqual(expected, payload["etag"])
-            self.assertEqual([{"id": "op-1", "name": "干员A"}], payload["operators"])
+            self.assertEqual([operator()], payload["operators"])
             self.assertEqual({"schema": 1}, payload["meta"])
             self.assertEqual(int(path.stat().st_mtime * 1000), payload["updated_at"])
+
+    def test_real_operators_config_loads(self):
+        path = REPO_ROOT / "assets" / "operators.json"
+        expected = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        center = OperatorConfigCenter(str(path)).load()
+        payload = center.get()
+        self.assertEqual(17, len(payload["operators"]))
+        ids = {item["id"] for item in payload["operators"]}
+        self.assertIn("haizhua", ids)
+        self.assertIn("yedan", ids)
+        self.assertEqual(expected, payload["version"])
+        self.assertEqual(expected, payload["etag"])
+        self.assertEqual("S11「群星」", payload["meta"]["season"])
+        self.assertIn("unknown_cd", payload["meta"])
 
     def test_content_change_changes_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "operators.json"
-            write_config(path, [{"id": "a"}])
+            write_config(path, [operator("a")])
             first = OperatorConfigCenter(str(path)).load().version
-            write_config(path, [{"id": "b"}])
+            write_config(path, [operator("b")])
             second = OperatorConfigCenter(str(path)).load().version
             self.assertNotEqual(first, second)
 
@@ -90,13 +117,38 @@ class ConfigCenterLoadTests(unittest.TestCase):
             with self.assertRaises(OperatorConfigError):
                 OperatorConfigCenter(str(path)).load()
 
+            path.write_text(json.dumps({"operators": []}), encoding="utf-8")
+            with self.assertRaises(OperatorConfigError):
+                OperatorConfigCenter(str(path)).load()
+
+            path.write_text(json.dumps({"operators": []}), encoding="utf-8")
+            with self.assertRaises(OperatorConfigError):
+                OperatorConfigCenter(str(path)).load()
+
+            path.write_text(
+                json.dumps({"operators": [operator()], "_meta": "bad"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(OperatorConfigError):
+                OperatorConfigCenter(str(path)).load()
+
+            # 缺少 skills / skills 非 3 槽
+            broken = operator()
+            broken["skills"] = []
+            path.write_text(
+                json.dumps({"operators": [broken], "_meta": {}}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(OperatorConfigError):
+                OperatorConfigCenter(str(path)).load()
+
 
 class ConfigApiTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "operators.json"
-        self.raw = write_config(self.path, [{"id": "op-1", "name": "干员A"}])
+        self.raw = write_config(self.path, [operator()])
         self.center = OperatorConfigCenter(str(self.path)).load()
         self.patcher = mock.patch.object(v1_config, "config_center", self.center)
         self.patcher.start()
@@ -122,7 +174,7 @@ class ConfigApiTests(unittest.IsolatedAsyncioTestCase):
         body = response.content
         self.assertEqual(expected, body["version"])
         self.assertEqual(expected, body["etag"])
-        self.assertEqual([{"id": "op-1", "name": "干员A"}], body["operators"])
+        self.assertEqual([operator()], body["operators"])
         self.assertEqual({"schema": 1}, body["meta"])
 
     async def test_if_none_match_returns_304_empty(self):
@@ -159,6 +211,21 @@ class ConfigApiTests(unittest.IsolatedAsyncioTestCase):
                 await v1_config.get_operators_config(make_request())
         self.assertEqual(503, ctx.exception.status_code)
         self.assertEqual(v1_common.CODE_UNAVAILABLE, ctx.exception.code)
+        self.assertEqual("CONFIG_UNAVAILABLE", ctx.exception.error_code)
+
+    async def test_empty_operators_returns_503(self):
+        empty_path = Path(self.tmp.name) / "empty.json"
+        empty_path.write_text(
+            json.dumps({"operators": [], "_meta": {}}), encoding="utf-8"
+        )
+        with mock.patch.object(
+            v1_config,
+            "config_center",
+            OperatorConfigCenter(str(empty_path)),
+        ):
+            with self.assertRaises(v1_common.APIError) as ctx:
+                await v1_config.get_operators_config(make_request())
+        self.assertEqual(503, ctx.exception.status_code)
         self.assertEqual("CONFIG_UNAVAILABLE", ctx.exception.error_code)
 
     async def test_rate_limited(self):

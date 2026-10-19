@@ -204,7 +204,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - 数据来源（镜像内）：`assets/operators.json`（`_meta` + `operators`），启动时读入内存并计算版本；文件变更后**重启生效**（不热加载）。
 - `version`/`etag` = 文件内容 **sha256 前 16 位**，内容变则变；`updated_at` = 文件 mtime（Unix 毫秒）。
 - 响应头：`ETag: "<version>"`、`Cache-Control: public, max-age=60`；请求 `If-None-Match` 匹配（支持弱校验/逗号列表/`*`）时返回 **304，无 body**；不匹配返回 200。
-- 文件缺失/非法 → **503 `CONFIG_UNAVAILABLE`**（前端可降级用本地缓存）。
+- 文件缺失/非法/**`operators` 为空或结构非法** → **503 `CONFIG_UNAVAILABLE`**（服务端不会下发空列表，避免客户端误覆盖本地配置；前端可降级用本地缓存）。
 
 `MyRoom`（`GET /api/v1/rooms/mine` 每项）= 现有房间公开字段 + `joined_at`（Unix 毫秒）+ `role`（`owner|member`），**不含 password_hash**。该接口需 JWT；只返回当前用户已加入、未关闭未删除的房间（公开/私有均含，私有房已是成员故无需密码）。**未关闭/未删除过滤在 SQL 层完成后再分页**（无效房不占 limit 名额），按 `room_members.joined_at` 倒序；游标 `before` 为上一页最后一项的 `joined_at` 毫秒（同毫秒并列极少，按 joined_at 游标）；`next_before` 同类型；`page/page_size` 为客户端兼容参数（无 `before` 时按 page 偏移，有 before 时以游标为准）。`/rooms/mine` 必须声明在 `/rooms/{room_id_or_code}` 之前。
 
