@@ -23,6 +23,7 @@ from api.v1_common import (
     ok,
 )
 from service import backgrounds as backgrounds_service
+from log.logger import log_exception
 from service import messages as messages_service
 from service import rooms as rooms_service
 from service.messages import MessageError
@@ -78,6 +79,13 @@ def _raise_message_error(exc: MessageError) -> None:
         exc.message,
         error_code=exc.error_code,
     )
+
+
+def _get_websocket_manager():
+    """延迟导入 WS 管理器（避免 HTTP 模块在离线测试环境强依赖 websockets）。"""
+    from websocket.websocket_manager import websocket_manager
+
+    return websocket_manager
 
 
 class CreateRoomRequest(BaseModel):
@@ -269,8 +277,18 @@ async def leave_room(
 ):
     try:
         await rooms_service.leave_room(user, room_id_or_code)
+        room = await rooms_service.resolve_room(room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # 安全：HTTP 退房成功后立即摘除该用户的 WS 房间会话，避免继续收 chat_message
+    try:
+        await _get_websocket_manager().detach_user_from_room(
+            user.id, room.id, reason="left"
+        )
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "HTTP leave 摘除 WS 会话失败", {"room": room_id_or_code})
+
     return ok({"left": True}, request=request)
 
 
@@ -285,6 +303,16 @@ async def kick_member(
         members = await rooms_service.kick_member(
             user, room_id_or_code, payload.user_id
         )
+        room = await rooms_service.resolve_room(room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # 安全：被踢成员立即摘除 WS 房间会话并广播 user_left(reason=kicked)
+    try:
+        await _get_websocket_manager().detach_user_from_room(
+            payload.user_id, room.id, reason="kicked"
+        )
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "HTTP kick 摘除 WS 会话失败", {"room": room_id_or_code})
+
     return ok({"members": members}, request=request)

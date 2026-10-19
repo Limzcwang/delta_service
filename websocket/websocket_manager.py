@@ -440,6 +440,34 @@ class WebSocketManager:
         # 包含发送者本人（客户端依赖 client_msg_id 去重/回显）
         await self.broadcast_to_room(room.id, payload)
 
+    async def detach_user_from_room(
+        self, user_id: Any, room_id: Any, reason: str = "left"
+    ) -> bool:
+        """把某用户从房间频道摘除（HTTP leave/kick 后由 API 层调用）。
+
+        - 只处理该用户当前正在该房间的连接；不在房间/无连接返回 False；
+        - 清理 session.room_id（在线状态随之消失），并向房间余下成员广播
+          ``user_left``（reason=left/kicked）；
+        - 连接本身保持打开（用户可重新 join 其他房间或重新加入）。
+        """
+        session = self.sessions.get(str(user_id))
+        if session is None or session.room_id is None:
+            return False
+        if str(session.room_id) != str(room_id):
+            return False
+
+        room_code = session.room_code
+        user = session.user
+        session.room_id = None
+        session.room_code = None
+        if user is not None:
+            await self.broadcast_to_room(
+                str(room_id),
+                self._user_event("user_left", room_id, room_code, user, reason=reason),
+                exclude_user_id=session.user_id,
+            )
+        return True
+
     # ------------------------------------------------------------------ 广播/清理
     async def broadcast(self, message: str) -> None:
         """广播消息给所有已连接的客户端（保留给心跳/数据推送等）。"""

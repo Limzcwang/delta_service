@@ -12,10 +12,13 @@ from config.database import DATABASE_CONFIG
 from log.api_logger import APILoggingMiddleware, LoggingRoute
 from log.logger import GlobalLogger
 from log.sql_logger import init_sql_logging
+from service.message_cleanup import MessageCleanupTask
 
 
 def create_app():
     """创建FastAPI应用实例"""
+    # 聊天消息保留期清理（默认 24h 一次，启动后先跑一次；不依赖 legacy WS 开关）
+    message_cleanup = MessageCleanupTask()
     app = FastAPI(
         title="Delta Service API",
         description="实时通信服务的HTTP API接口",
@@ -71,12 +74,18 @@ def create_app():
         # 初始化SQL日志记录
         await init_sql_logging()
 
+        # 启动聊天消息保留期清理任务（默认 30 天保留，每日一次）
+        message_cleanup.start()
+
         print("Delta Service API 启动完成")
 
     # 应用关闭事件
     @app.on_event("shutdown")
     async def shutdown_event():
         """应用关闭时执行"""
+        # 优雅停止消息清理任务
+        await message_cleanup.stop()
+
         # 记录系统关闭日志
         GlobalLogger.shutdown()
 
