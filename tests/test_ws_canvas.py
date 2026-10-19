@@ -65,6 +65,15 @@ class WsCanvasTestCase(unittest.IsolatedAsyncioTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         patcher = mock.patch.object(
+            manager_module.canvas_service,
+            "get_snapshot",
+            new=mock.AsyncMock(
+                return_value={"strokes": [], "rev": 0, "updated_at": None}
+            ),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(
             manager_module.rooms_service,
             "ensure_member",
             new=mock.AsyncMock(return_value=None),
@@ -122,7 +131,8 @@ class CanvasBroadcastTests(WsCanvasTestCase):
         event = self.bob_ws.messages("canvas_op")[0]
         self.assertEqual({"kind": "clear"}, event["op"])
         self.assertEqual(
-            {"strokes": [], "rev": 1}, self.manager.canvas_states[self.room.id]
+            {"strokes": [], "rev": 1, "updated_at": None},
+            self.manager.canvas_states[self.room.id],
         )
 
 
@@ -180,6 +190,117 @@ class CanvasValidationTests(WsCanvasTestCase):
         await self.send_op(self.bob_session, rev=1)
         self.assertEqual("NOT_ROOM_MEMBER", self.bob_ws.last()["code"])
         self.assertEqual([], self.bob_ws.messages("canvas_op"))
+
+
+class CanvasJoinStateTests(WsCanvasTestCase):
+    async def test_new_member_gets_unsaved_ops(self):
+        await self.send_op(self.alice_session, rev=1)
+        carol = make_user(3, "carol")
+        carol_ws = FakeWebSocket()
+        carol_session = make_session(self.manager, carol, carol_ws)
+        with mock.patch.object(
+            manager_module.rooms_service,
+            "get_room_for_member",
+            new=mock.AsyncMock(
+                return_value=(self.room, [
+                    {"id": "1", "username": "alice", "role": "owner"},
+                    {"id": "2", "username": "bob", "role": "member"},
+                    {"id": "3", "username": "carol", "role": "member"},
+                ])
+            ),
+        ):
+            await self.manager.process_message(
+                carol_session,
+                json.dumps({"type": "join_room", "room_id_or_code": self.room.code}),
+            )
+
+        snapshot = carol_ws.messages("room_joined")[0]["canvas_snapshot"]
+        self.assertEqual([stroke()], snapshot["strokes"])
+        self.assertEqual(1, snapshot["rev"])
+
+    async def test_join_loads_db_snapshot(self):
+        db_stroke = stroke()
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "get_snapshot",
+            new=mock.AsyncMock(
+                return_value={"strokes": [db_stroke], "rev": 5, "updated_at": 1}
+            ),
+        ):
+            self.assertEqual(
+                {"strokes": [db_stroke], "rev": 5, "updated_at": 1},
+                await self.manager.get_canvas_snapshot(self.room.id),
+            )
+            self.assertEqual([db_stroke], self.manager.canvas_states[self.room.id]["strokes"])
+
+    async def test_get_canvas_snapshot_merges_db_and_ops(self):
+        db_stroke = stroke()
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "get_snapshot",
+            new=mock.AsyncMock(
+                return_value={"strokes": [db_stroke], "rev": 5, "updated_at": 1}
+            ),
+        ):
+            await self.send_op(self.alice_session, rev=1)
+
+        merged = await self.manager.get_canvas_snapshot(self.room.id)
+        self.assertEqual([db_stroke, stroke()], merged["strokes"])
+        self.assertEqual(5, merged["rev"])
+
+
+class CanvasFlushMergeTests(WsCanvasTestCase):
+    async def test_flush_merges_db_snapshot_with_memory_ops(self):
+        db_stroke = stroke()
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "get_snapshot",
+            new=mock.AsyncMock(
+                return_value={"strokes": [db_stroke], "rev": 5, "updated_at": 1}
+            ),
+        ):
+            await self.send_op(self.alice_session, rev=1)
+
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "save_snapshot",
+            new=mock.AsyncMock(return_value={"rev": 5, "updated_at": 2}),
+        ) as save_snapshot:
+            await self.manager.flush_canvas_on_close(self.room.id)
+
+        save_snapshot.assert_awaited_once_with(
+            self.room.id, [db_stroke, stroke()], 5
+        )
+
+    async def test_flush_persists_clear_as_empty(self):
+        db_stroke = stroke()
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "get_snapshot",
+            new=mock.AsyncMock(
+                return_value={"strokes": [db_stroke], "rev": 5, "updated_at": 1}
+            ),
+        ):
+            await self.send_op(self.alice_session, rev=1, op={"kind": "clear"})
+
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "save_snapshot",
+            new=mock.AsyncMock(return_value={"rev": 5, "updated_at": 2}),
+        ) as save_snapshot:
+            await self.manager.flush_canvas_on_close(self.room.id)
+
+        save_snapshot.assert_awaited_once_with(self.room.id, [], 5)
+
+    async def test_flush_without_memory_state_does_not_overwrite_db(self):
+        with mock.patch.object(
+            manager_module.canvas_service,
+            "save_snapshot",
+            new=mock.AsyncMock(),
+        ) as save_snapshot:
+            flushed = await self.manager.flush_canvas_on_close("other-room")
+        self.assertEqual(0, flushed)
+        save_snapshot.assert_not_awaited()
 
 
 class CanvasRateLimitTests(WsCanvasTestCase):

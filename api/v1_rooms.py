@@ -209,11 +209,18 @@ async def get_room_canvas(
         room, _members = await rooms_service.get_room_for_member(
             room_id_or_code, user
         )
-        snapshot = await canvas_service.get_snapshot(room.id)
     except RoomError as exc:
         _raise_room_error(exc)
-    except CanvasError as exc:
-        _raise_canvas_error(exc)
+
+    # DB 快照 ∪ 内存未保存增量（单进程；WS manager 为唯一内存态持有者）
+    try:
+        snapshot = await _get_websocket_manager().get_canvas_snapshot(room.id)
+    except Exception as exc:  # pragma: no cover - 降级为 DB 快照
+        log_exception(exc, "读取合并画板快照失败", {"room": room_id_or_code})
+        try:
+            snapshot = await canvas_service.get_snapshot(room.id)
+        except CanvasError as canvas_exc:
+            _raise_canvas_error(canvas_exc)
 
     return ok(snapshot, request=request)
 

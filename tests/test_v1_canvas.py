@@ -49,35 +49,37 @@ class CanvasApiTests(unittest.IsolatedAsyncioTestCase):
             "rev": 9,
             "updated_at": 1792400000000,
         }
+        manager = SimpleNamespace(
+            get_canvas_snapshot=mock.AsyncMock(return_value=snapshot)
+        )
         with mock.patch.object(
             v1_rooms.rooms_service,
             "get_room_for_member",
             new=mock.AsyncMock(return_value=(self.room, [])),
         ) as get_room, mock.patch.object(
-            v1_rooms.canvas_service,
-            "get_snapshot",
-            new=mock.AsyncMock(return_value=snapshot),
-        ) as get_snapshot:
+            v1_rooms, "_get_websocket_manager", return_value=manager
+        ):
             response = await v1_rooms.get_room_canvas(
                 DummyRequest(), "A1B2C", user=self.user
             )
 
         get_room.assert_awaited_once_with("A1B2C", self.user)
-        get_snapshot.assert_awaited_once_with(self.room.id)
+        manager.get_canvas_snapshot.assert_awaited_once_with(self.room.id)
         self.assertEqual(200, response["code"])
         self.assertEqual("req_canvas", response["request_id"])
         self.assertEqual(snapshot, response["data"])
 
     async def test_get_snapshot_empty_is_ok(self):
         empty = {"strokes": [], "rev": 0, "updated_at": None}
+        manager = SimpleNamespace(
+            get_canvas_snapshot=mock.AsyncMock(return_value=empty)
+        )
         with mock.patch.object(
             v1_rooms.rooms_service,
             "get_room_for_member",
             new=mock.AsyncMock(return_value=(self.room, [])),
         ), mock.patch.object(
-            v1_rooms.canvas_service,
-            "get_snapshot",
-            new=mock.AsyncMock(return_value=empty),
+            v1_rooms, "_get_websocket_manager", return_value=manager
         ):
             response = await v1_rooms.get_room_canvas(
                 DummyRequest(), "room-1", user=self.user

@@ -39,7 +39,7 @@
 
 - 时间：**Unix 毫秒时间戳**（`int64`），字段名以 `_at` / `ts` 结尾；服务端另有 ISO8601 字符串仅用于日志，不进入协议。
 - 字符集：UTF-8；JSON 使用 `application/json`，禁止 BOM。
-- 坐标：画板逻辑像素 `[0,1920] × [0,1080]`，原点左上角；客户端按窗口等比缩放后换算回逻辑坐标再上报。
+- 坐标：画板显示基准 1920×1080，但协议上报 **0–1 归一化** `{x,y}`（相对画布宽高，原点左上角）；服务端不改写，客户端按窗口等比缩放换算。
 - ID：用户 `user_id` 在协议中一律为 **字符串**（数据库自增 ID 序列化为字符串）；房间 `room_id` 为服务端生成的字符串（建议 ULID/UUID）。
 
 ### 1.3 请求头
@@ -177,10 +177,10 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | GET | `/api/v1/rooms/{room_id_or_code}` | 房间详情（成员/在线/房主/底图） | – | `{room,members:[UserSummary]}` |
 | PATCH | `/api/v1/rooms/{room_id_or_code}` | 房主改名称/底图/密码 | `{name?,background_id?,password? (null=清除)}` | `{room}` |
 | DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主关闭房间 | – | `{closed:true}` |
-| POST | `/api/v1/rooms/{room_id_or_code}/join` | 加入房间 | `{password?}` | `{room,canvas_seq,background,skill_state}` |
+| POST | `/api/v1/rooms/{room_id_or_code}/join` | 加入房间 | `{password?}` | `{room,members}` |
 | POST | `/api/v1/rooms/{room_id_or_code}/leave` | 离开房间 | – | `{left:true}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C） | `?before&limit` | `{items:[ChatMessage],has_more,next_before}` |
-| GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D） | – | `{seq,canvas_size:[1920,1080],background,ops:[CanvasOp]}` |
+| GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D，DB ∪ 内存增量） | – | `{strokes:[CanvasOp],rev,updated_at}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
 
 `RoomSummary`（公共列表字段，产品要求）：
@@ -223,37 +223,26 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 ## 5. 画板（里程碑 D）
 
-| 项 | 约定 |
+| 项 | 约定（D 实际实现） |
 |---|---|
-| 逻辑画布 | **固定 1920×1080**；客户端等比缩放显示，上报前换算回逻辑坐标 |
-| 底图 | **由运营方配置**（服务端下发的预置图），用户**不得上传**；协议字段 `background:{id,url,width,height}`；无法加载时客户端用纯色背景兜底 |
-| 操作类型 | `draw`（笔画）、`undo`（撤销）、`clear`（清空） |
-| 坐标 | 浮点逻辑像素，保留 1 位小数；`points:[[x,y],...]`，单 op ≤ 1024 点 |
-| 顺序 | 服务端为每个房间维护单调递增 `seq`，客户端必须按 `seq` 应用；发现跳号时请求/等待 `canvas_snapshot` 重同步 |
-| 快照 | 加入房间时服务端下发 `canvas_snapshot`（含当前 `seq`、背景、`ops` 列表）；新客户端不重放历史消息，只重放画板 |
-| 持久化 | 建议服务端保存 op log（上限与是否落库见开放问题）；`clear` 之后历史 op 可丢弃 |
+| 逻辑画布 | 显示基准 **1920×1080**；协议坐标一律 **0–1 归一化** |
+| 底图 | **由运营方配置**，用户不得上传；房间 `background_id` / `background:{id,url,width,height}`；画板快照本身不存底图 |
+| 操作类型 | `stroke`（笔画；`tool` 支持 pen/eraser）、`clear`（清空）；**无 undo** |
+| 坐标/样式 | `points:[{x,y}]` 为 0–1 浮点；单 op ≤ **512** 点；`color` `#RRGGBB`；`width` 1–32；`tool` pen/eraser |
+| 顺序 | `rev` **每连接每房间**独立单调递增；其他成员仅用它丢弃旧包，不做状态合并；重连/重新进房从 0 重置 |
+| 快照 | 加入房间 `room_joined.canvas_snapshot={strokes,rev}`（DB 快照 ∪ 内存未保存增量）；HTTP `GET .../canvas` 同源合并，无 `seq/canvas_size/background/ops` |
+| 持久化 | 仅显式 `canvas_snapshot_save` + 房主关房 flush；无自动快照；`room_canvas` 保留 7 天；**离开前必须 save** |
 
 `CanvasOp`：
 
 ```json
-{
-  "op_id": "op_01J8Z...",
-  "seq": 42,
-  "user_id": "1",
-  "op": "draw",
-  "payload": {
-    "tool": "pen",
-    "color": "#FF3B30",
-    "width": 4,
-    "points": [[120.5, 88.0], [121.0, 89.5]]
-  },
-  "ts": 1750000000123
-}
+{"kind":"stroke","points":[{"x":0.12,"y":0.34},{"x":0.13,"y":0.35}],
+ "color":"#FF3B30","width":4,"tool":"pen"}
+{"kind":"clear"}
 ```
 
-- `undo`：撤销**该用户最近一条**尚未撤销的 draw（服务端口径见开放问题；客户端 UI 只允许撤销自己的笔画）。
-- `clear`：清空整块画板（建议仅房主可发）。
-- 限频：单人 canvas_op 建议 ≤ 30 次/秒（批量笔画请合并 points），超限 `RATE_LIMITED`。
+- `clear`：清空整块画板（房间成员均可发；以快照/落库为准）。
+- 限频：单人 `canvas_op` ≤ 30 次/秒，超限 `RATE_LIMITED`；批量笔画请合并 points。
 
 ---
 
@@ -262,7 +251,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ### 6.1 连接
 
 - URL：`ws://<host>:8000/ws`（B2b 现状，与 HTTP 同端口）；生产目标 `wss://<host>/ws`（反代同一 8000 上游）。旧独立 `ws://<host>:8765` 仅在 `LEGACY_WS_ENABLED=true` 时存在，默认关闭。
-- 所有消息为 JSON 文本，单条 ≤ 64KB（超限 `INVALID_PAYLOAD` 并断开）。
+- 所有消息为 JSON 文本；普通消息单条 ≤ 64KB；`canvas_snapshot_save` 允许到 **512KB**（服务端按快照上限校验，超限 `INVALID_CANVAS_OP`）。
 - 心跳：服务端每 **30s** 下发 `heartbeat`，客户端 90s 未收到心跳可重连；客户端也可主动 `ping`。
   （B2b 现状即按此实现（30s）；旧 manager 的 data_pusher/离线检测只在 `LEGACY_WS_ENABLED=true` 时启动，`/ws` 客户端不会收到 `push` 演示数据。）
 - 客户端应实现指数退避重连（1s/2s/4s…上限 30s），重连后重新 `auth` 并重新 `join_room`。
@@ -308,7 +297,6 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `chat_send` | 发聊天消息（C） | 是 | 见下 |
 | `canvas_op` | 画板增量（D） | 是 | 见下 |
 | `canvas_snapshot_save` | 保存画板全量快照（D） | 是 | 见下 |
-| `canvas_op` | 画板操作（D） | 是 | 见下 |
 | `skill_report` | 上报技能快照（E） | 是 | 见下 |
 | `ping` | 心跳 | 否 | `{"type":"ping","ts":1750000000000}` |
 
@@ -321,7 +309,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 {"type":"chat_send","client_msg_id":"m-001","content":"大家好","content_type":"text"}
 ```
 ```json
-{"type":"canvas_op","op_id":"op_001","op":"draw","payload":{"tool":"pen","color":"#FF3B30","width":4,"points":[[120.5,88.0],[121.0,89.5]]}}
+{"type":"canvas_op","room_id":"01J8Z9K3Q7","rev":12,"op":{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}}
 ```
 ```json
 {"type":"skill_report","ts":1750000000123,"skills":[{"id":"skill-a","name":"闪现","ready_at":1750000008000,"total":1200}]}
@@ -335,9 +323,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `room_joined` | 加入成功，携带房间、成员、画板快照、技能状态 |
 | `user_joined` / `user_left` | 房间成员变化 |
 | `chat_message` | 聊天消息（C） |
-| `canvas_op` | 画板增量广播（D，不含发送者） |
+| `canvas_op` | 画板增量广播（D，不含发送者，附 user_id/rev） |
 | `canvas_snapshot_saved` | 画板快照保存确认（D） |
-| `canvas_snapshot` / `canvas_op` | 画板快照 / 增量操作（D） |
 | `skill_state` | 某用户最新技能快照（E） |
 | `heartbeat` | 心跳 |
 | `pong` | 对 ping 的响应 |
@@ -359,9 +346,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
     "background": {"id": "bg_default_01", "url": "https://cdn.example.com/bg/01.png", "width": 1920, "height": 1080}
   },
   "members": [{"id": "1", "username": "alice", "online": true}],
-  "canvas_snapshot": {"seq": 42, "canvas_size": [1920, 1080], "background": {"id": "bg_default_01", "url": "https://cdn.example.com/bg/01.png", "width": 1920, "height": 1080}, "ops": []},
-  "skill_state": {"items": [{"user_id": "1", "ts": 1750000000123, "skills": []}]},
-  "server_time": 1750000000000
+  "canvas_snapshot": {"strokes": [], "rev": 0},
+  "ts": 1750000000000
 }
 ```
 
@@ -395,13 +381,17 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 > C1/B2b 客户端契约：字段固定为 `id` / `room_id` / `user` / `content` / `client_msg_id` / `created_at`；发送者本人也会收到广播，靠 `client_msg_id` 去重。`content_type` 暂不落库。
 
-`canvas_snapshot` / `canvas_op`（D）：
+`canvas_snapshot`（D，随 `room_joined` 下发；`GET .../canvas` 同结构）：
 
 ```json
-{"type":"canvas_snapshot","room_id":"01J8Z9K3Q7","seq":42,"canvas_size":[1920,1080],"background":{"id":"bg_default_01","url":"https://cdn.example.com/bg/01.png","width":1920,"height":1080},"ops":[]}
+{"strokes":[{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}],"rev":12}
 ```
+
+`canvas_op` 广播（D，发给房间内其他连接，**不回发送者**）：
+
 ```json
-{"type":"canvas_op","room_id":"01J8Z9K3Q7","seq":43,"op_id":"op_001","user_id":"1","op":"draw","payload":{"tool":"pen","color":"#FF3B30","width":4,"points":[[120.5,88.0]]},"ts":1750000001600}
+{"type":"canvas_op","room_id":"01J8Z9K3Q7","user_id":"1","rev":13,
+ "op":{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}}
 ```
 
 `skill_state`（E）：
@@ -421,8 +411,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ### 6.5 兼容与容错
 
 - 客户端必须**忽略未知字段**与未知 `type`（不要因新增消息而崩溃）；服务端对未知 `type` 回 `{"type":"error","code":"INVALID_PAYLOAD"}` 或忽略（实现二选一，需一致）。
-- `client_msg_id` / `op_id` 用于客户端去重与重试，服务端原样回传。
-- 重连后状态以 `room_joined` 的 `canvas_snapshot` + `skill_state` 为准，不依赖增量补齐。
+- `client_msg_id` 用于聊天去重/重试，服务端原样回传；画板无 `op_id`，用 `rev` 丢弃旧包。
+- 重连后状态以 `room_joined.canvas_snapshot`（DB 快照 ∪ 内存未保存增量）为准，不依赖增量补齐；`rev` 重连后从 0 重新计数。
 
 ---
 
@@ -437,7 +427,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 旧 `authenticate` | **已移除**：返回 `auth_error`（`AUTH_INVALID`）并关闭 |
 | 未认证消息 | `error`，`code=NOT_AUTHENTICATED`，连接保持（可继续尝试 auth） |
 | 单用户单连接 | 新连接认证成功时关闭旧连接（close code 4000），旧连接退出房间并广播 `user_left(reason=replaced)` |
-| 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`ping`；`canvas_op`/`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（D/E 实现） |
+| 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`canvas_op`、`canvas_snapshot_save`、`ping`；`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（E 实现） |
 | chat_send | 需已进房；限频 5 条/秒/用户（超限 `RATE_LIMITED`）；空/超长（>2000）`INVALID_MESSAGE`；非成员 `NOT_ROOM_MEMBER`；成功后广播 `chat_message` 给房间内所有连接（含发送者），`client_msg_id` 原样回传 |
 | 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id（字符串），`limit` 默认 50/上限 100；需 JWT + 房间成员 |
 | HTTP leave/kick | 成功后服务端摘除该用户在当前房间的 WS 会话（不再收 `chat_message`，在线状态消失），并向余下成员广播 `user_left(reason=left\|kicked)` |
@@ -448,7 +438,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 心跳 | 服务端每 30s 下发 `heartbeat`，客户端 90s 未收到可重连；保留 `ping→pong` |
 | 错误格式 | `{"type":"error","code":"...","error_code":"...","message":"..."}`：`code` 为新协议字段，`error_code` 为旧字段兼容（同值） |
 | 房间事件 | `user_joined` / `user_left` 载荷：`room_id`、`room_code`、`user{id,username}`、`ts`（ms）、可选 `reason` |
-| 画板/技能 | 当前 `room_joined` **不包含** `canvas_snapshot` / `skill_state`（D/E 阶段加入） |
+| 画板/技能 | `room_joined` 已含 `canvas_snapshot{strokes,rev}`；**不包含** `skill_state`（E 阶段加入） |
 
 ### 6.7 共享画板（D 当前实现）
 
@@ -539,7 +529,6 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `UNSUPPORTED_MESSAGE_TYPE` | 当前版本未实现的消息类型 |
 | `CANVAS_OUT_OF_ORDER` | 画板 op 的 rev 非递增（乱序/回退，丢弃） |
 | `INVALID_CANVAS_OP` | 画板 op/快照字段、坐标、点数、大小非法 |
-| `CANVAS_SEQ_GAP` | 画板操作序号不连续（需重同步，D 阶段） |
 | `INTERNAL_ERROR` | 服务端内部错误 |
 
 安全约定（与现有实现一致）：错误响应不含异常堆栈/SQL/连接串；服务端日志通过 `request_id`/`user_id` 对账。
@@ -631,8 +620,8 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | Q1 | 是否启用 `/api/v1` 前缀？旧 `/api` 何时下线？ | B 起启用 v1，旧路径保留到 C 结束 | 客户端 Base URL/迁移成本 |
 | Q2 | JWT 有效期与刷新策略（是否 refresh token / 单点登录） | **已定：7 天、无 refresh，过期重登（B1 实现）**；是否增加 refresh/滑动续期后续再议 | 认证实现与桌面端体验 |
 | Q3 | 房间元数据是否落 MySQL、成员上限、房间名长度 | 落库、8 人、1–32 字符 | B 的 schema 与容量 |
-| Q4 | 房主离开/转让/踢人/关闭房间的细则；清空画板权限 | 房主需先转让或关闭；仅房主可清空 | B/D 权限模型 |
-| Q5 | 画板 undo 语义（按用户/全局）、op 保留深度、是否落库 | 仅撤销自己的笔画、保留最近 5000 ops、内存+定期快照 | D 的实现与内存占用 |
+| Q4 | 房主离开/转让/踢人/关闭房间的细则；清空画板权限 | 房主需先关闭；房间成员均可发 `clear` / 保存快照 | B/D 权限模型 |
+| Q5 | 画板 undo 语义、op 保留深度、是否落库 | **已定：D 不做 undo**；内存累计最多 5000 笔，仅显式 `canvas_snapshot_save` + 关房 flush 落库 | D 的实现与内存占用 |
 | Q6 | 聊天历史保留策略（内存/DB、条数/天数、分页游标） | MySQL 保留 30 天，游标分页 | C 的存储与合规 |
 | Q7 | 技能 `ready_at`/`total` 的精确定义；技能列表是否固定 | 由客户端定义、服务端透传；列表固定 | E 的展示一致性 |
 | Q8 | 限频具体阈值（HTTP 登录、WS 聊天、画板、技能） | 登录 5 次/分/IP；聊天 5 条/秒/人；画板 30 op/秒/人；技能 2 次/秒/人 | 防滥用与体验 |

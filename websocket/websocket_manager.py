@@ -374,12 +374,22 @@ class WebSocketManager:
 
     async def _send_room_joined(self, session, room, members) -> None:
         room_payload = rooms_service.room_to_dict(room, len(members))
+        try:
+            state = await self._get_canvas_state(room.id)
+        except Exception as exc:  # pragma: no cover - DB 异常降级为空板
+            log_exception(exc, "加载画板状态失败", {"room": room.id})
+            state = {"strokes": [], "rev": 0}
         await self._send(
             session,
             {
                 "type": "room_joined",
                 "room": room_payload,
                 "members": self._members_payload(members, room.id),
+                # 新成员/重连拿到的当前画板（DB 快照 + 内存未保存增量）
+                "canvas_snapshot": {
+                    "strokes": list(state.get("strokes") or []),
+                    "rev": int(state.get("rev", 0) or 0),
+                },
                 "ts": int(time.time() * 1000),
             },
         )
@@ -490,10 +500,34 @@ class WebSocketManager:
         return True
 
     # ------------------------------------------------------------------ 画板
-    def _accumulate_canvas_state(self, room_id: str, op: Dict[str, Any], rev: int) -> None:
-        state = self.canvas_states.setdefault(
-            str(room_id), {"strokes": [], "rev": 0}
-        )
+    async def _get_canvas_state(self, room_id: Any) -> Dict[str, Any]:
+        """懒加载房间画板状态：DB 快照 + 本次进程内未保存增量。"""
+        key = str(room_id)
+        state = self.canvas_states.get(key)
+        if state is not None:
+            return state
+        snapshot = await canvas_service.get_snapshot(key)
+        state = {
+            "strokes": list(snapshot.get("strokes") or []),
+            "rev": int(snapshot.get("rev", 0) or 0),
+            "updated_at": snapshot.get("updated_at"),
+        }
+        self.canvas_states[key] = state
+        return state
+
+    async def get_canvas_snapshot(self, room_id: Any) -> Dict[str, Any]:
+        """对外返回合并后的画板快照（HTTP 历史/新成员一致）。"""
+        state = await self._get_canvas_state(room_id)
+        return {
+            "strokes": list(state.get("strokes") or []),
+            "rev": int(state.get("rev", 0) or 0),
+            "updated_at": state.get("updated_at"),
+        }
+
+    async def _accumulate_canvas_state(
+        self, room_id: str, op: Dict[str, Any], rev: int
+    ) -> None:
+        state = await self._get_canvas_state(room_id)
         state["rev"] = max(int(state.get("rev", 0)), rev)
         if op.get("kind") == "clear":
             state["strokes"] = []
@@ -544,7 +578,12 @@ class WebSocketManager:
 
         session.canvas_rev = rev
         op = data.get("op")
-        self._accumulate_canvas_state(room.id, op, rev)
+        try:
+            await self._accumulate_canvas_state(room.id, op, rev)
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "累积画板状态失败", {"room": room.id})
+            await self._send_error(session, "INTERNAL_ERROR", "画板状态更新失败")
+            return
         await self.broadcast_to_room(
             room.id,
             {
@@ -590,6 +629,7 @@ class WebSocketManager:
         self.canvas_states[str(room.id)] = {
             "strokes": list(data.get("strokes") or []),
             "rev": int(snapshot.get("rev", 0)),
+            "updated_at": snapshot.get("updated_at"),
         }
         await self._send(
             session,
@@ -602,18 +642,25 @@ class WebSocketManager:
         )
 
     async def flush_canvas_on_close(self, room_id: Any) -> int:
-        """房间关闭时把内存中的画板状态落盘（无数据则跳过）。"""
-        state = self.canvas_states.pop(str(room_id), None)
-        if not state or not state.get("strokes"):
+        """房间关闭时把内存最终状态落盘。
+
+        - 内存无该房间状态（本次进程没有进房/op/save）→ 不写 DB，避免空数组
+          覆盖已保存快照；
+        - 状态已从 DB 懒加载并应用增量，因此直接落库即可（clear 后 strokes=[]
+          也会显式写入，保证空板语义）。
+        """
+        key = str(room_id)
+        if key not in self.canvas_states:
             return 0
+        state = self.canvas_states.pop(key)
         try:
             await canvas_service.save_snapshot(
-                str(room_id), state["strokes"], int(state.get("rev", 0))
+                key, state.get("strokes") or [], int(state.get("rev", 0) or 0)
             )
         except Exception as exc:
             log_exception(exc, "关房画板快照落盘失败", {"room": room_id})
             return 0
-        return len(state["strokes"])
+        return len(state.get("strokes") or [])
 
     # ------------------------------------------------------------------ 广播/清理
     async def broadcast(self, message: str) -> None:
