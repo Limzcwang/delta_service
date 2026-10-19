@@ -18,11 +18,15 @@ from api.v1_common import (
     CODE_FORBIDDEN,
     CODE_INTERNAL,
     CODE_NOT_FOUND,
+    CODE_RATE_LIMITED,
     APIError,
     ok,
 )
 from service import backgrounds as backgrounds_service
+from log.logger import log_exception
+from service import messages as messages_service
 from service import rooms as rooms_service
+from service.messages import MessageError
 from service.rooms import RoomError
 
 router = APIRouter(prefix="/api/v1", tags=["v1-rooms"])
@@ -52,6 +56,8 @@ _ERROR_MAP = {
     rooms_service.ERR_ROOM_PASSWORD_NOT_ALLOWED: (400, CODE_BAD_REQUEST),
     "INVALID_PAGINATION": (400, CODE_BAD_REQUEST),
     "INVALID_CURSOR": (400, CODE_BAD_REQUEST),
+    messages_service.ERR_INVALID_MESSAGE: (400, CODE_BAD_REQUEST),
+    messages_service.ERR_RATE_LIMITED: (429, CODE_RATE_LIMITED),
 }
 
 
@@ -63,6 +69,23 @@ def _raise_room_error(exc: RoomError) -> None:
         exc.message,
         error_code=exc.error_code,
     )
+
+
+def _raise_message_error(exc: MessageError) -> None:
+    status, code = _ERROR_MAP.get(exc.error_code, (400, CODE_BAD_REQUEST))
+    raise APIError(
+        status,
+        code,
+        exc.message,
+        error_code=exc.error_code,
+    )
+
+
+def _get_websocket_manager():
+    """延迟导入 WS 管理器（避免 HTTP 模块在离线测试环境强依赖 websockets）。"""
+    from websocket.websocket_manager import websocket_manager
+
+    return websocket_manager
 
 
 class CreateRoomRequest(BaseModel):
@@ -166,6 +189,30 @@ async def get_room(
     )
 
 
+@router.get("/rooms/{room_id_or_code}/messages", summary="房间历史消息")
+async def list_room_messages(
+    request: Request,
+    room_id_or_code: str,
+    before: Optional[str] = None,
+    limit: int = messages_service.DEFAULT_PAGE_SIZE,
+    user=Depends(get_current_user),
+):
+    """按时间倒序返回历史消息；before 为上一页最后一条消息 id。"""
+    try:
+        room, _members = await rooms_service.get_room_for_member(
+            room_id_or_code, user
+        )
+        page = await messages_service.list_messages(
+            room, before=before, limit=limit
+        )
+    except RoomError as exc:
+        _raise_room_error(exc)
+    except MessageError as exc:
+        _raise_message_error(exc)
+
+    return ok(page, request=request)
+
+
 @router.patch("/rooms/{room_id_or_code}", summary="更新房间（仅房主）")
 async def update_room(
     request: Request,
@@ -230,8 +277,18 @@ async def leave_room(
 ):
     try:
         await rooms_service.leave_room(user, room_id_or_code)
+        room = await rooms_service.resolve_room(room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # 安全：HTTP 退房成功后立即摘除该用户的 WS 房间会话，避免继续收 chat_message
+    try:
+        await _get_websocket_manager().detach_user_from_room(
+            user.id, room.id, reason="left"
+        )
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "HTTP leave 摘除 WS 会话失败", {"room": room_id_or_code})
+
     return ok({"left": True}, request=request)
 
 
@@ -246,6 +303,16 @@ async def kick_member(
         members = await rooms_service.kick_member(
             user, room_id_or_code, payload.user_id
         )
+        room = await rooms_service.resolve_room(room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # 安全：被踢成员立即摘除 WS 房间会话并广播 user_left(reason=kicked)
+    try:
+        await _get_websocket_manager().detach_user_from_room(
+            payload.user_id, room.id, reason="kicked"
+        )
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "HTTP kick 摘除 WS 会话失败", {"room": room_id_or_code})
+
     return ok({"members": members}, request=request)

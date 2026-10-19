@@ -31,7 +31,7 @@ DATABASE_CONFIG = {
     },
     "apps": {
         "models": {
-            "models": ["dao.user", "dao.room"],
+            "models": ["dao.user", "dao.room", "dao.message"],
             "default_connection": "default",
         }
     },

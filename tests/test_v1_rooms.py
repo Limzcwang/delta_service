@@ -187,15 +187,27 @@ class JoinLeaveApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("password_hash", json.dumps(response))
 
     async def test_leave_success(self):
+        manager = SimpleNamespace(
+            detach_user_from_room=mock.AsyncMock(return_value=True)
+        )
         with mock.patch.object(
             v1_rooms.rooms_service,
             "leave_room",
             new=mock.AsyncMock(return_value=True),
+        ), mock.patch.object(
+            v1_rooms.rooms_service,
+            "resolve_room",
+            new=mock.AsyncMock(return_value=make_room()),
+        ), mock.patch.object(
+            v1_rooms, "_get_websocket_manager", return_value=manager
         ):
             response = await v1_rooms.leave_room(
                 DummyRequest(), "A1B2C", self.user
             )
         self.assertEqual({"left": True}, response["data"])
+        manager.detach_user_from_room.assert_awaited_once_with(
+            1, "room-1", reason="left"
+        )
 
 
 class RoomOwnerApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
@@ -226,15 +238,27 @@ class RoomOwnerApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
             response = await v1_rooms.close_room(DummyRequest(), "A1B2C", self.user)
         self.assertEqual({"closed": True}, response["data"])
 
+        manager = SimpleNamespace(
+            detach_user_from_room=mock.AsyncMock(return_value=True)
+        )
         with mock.patch.object(
             v1_rooms.rooms_service,
             "kick_member",
             new=mock.AsyncMock(return_value=[]),
+        ), mock.patch.object(
+            v1_rooms.rooms_service,
+            "resolve_room",
+            new=mock.AsyncMock(return_value=make_room()),
+        ), mock.patch.object(
+            v1_rooms, "_get_websocket_manager", return_value=manager
         ):
             response = await v1_rooms.kick_member(
                 DummyRequest(), "A1B2C", v1_rooms.KickMemberRequest(user_id="2"), self.user
             )
         self.assertEqual({"members": []}, response["data"])
+        manager.detach_user_from_room.assert_awaited_once_with(
+            "2", "room-1", reason="kicked"
+        )
 
 
 class BackgroundApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):

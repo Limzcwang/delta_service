@@ -64,9 +64,10 @@
 }
 ```
 
-- `code`：业务码，成功固定 `200`（与现有用户接口一致）；错误码见 §7。
+- `code`：通用数字业务码，成功固定 `200`；错误为 `4xxxx/5xxxx`（与 HTTP 状态码分开，见 §7.1）。
+- `data.error_code`：**字符串业务错误码**（如 `ROOM_NOT_FOUND`/`NOT_ROOM_MEMBER`/`INVALID_PAGINATION`），客户端的精确分支以它为准；成功响应 `data` 为业务数据，不携带该字段。
 - `message`：面向用户/开发者的简短文案，**不含异常堆栈、SQL、连接串**。
-- `data`：成功时的业务数据；失败时可为 `null`。
+- `data`：成功时的业务数据；失败时通常为 `{"error_code": "..."}`（无具体业务码的历史接口可能为 `null`）。
 - `request_id`：字符串，可选；失败响应必须尽量携带，便于与服务端日志对账。
 
 **过渡状态（A，必须知道）**：
@@ -82,8 +83,10 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 ### 1.5 分页
 
-- 请求：`?limit=<1..100，默认 50>&before=<毫秒时间戳或游标>`（消息历史）或 `?skip=<int>&limit=<int>`（用户列表，沿用现状）。
-- 响应：`data: {"items": [...], "next_before": <int|null>, "has_more": true|false}`；用户列表沿用 `{"users":[],"total":N}`。
+- 消息历史：请求 `?limit=<1..100，默认 50>&before=<上一页最后一条消息 id>`；`before` 是**消息 id 字符串**（不是时间戳）。
+- 消息历史响应：`data: {"items": [...], "next_before": <消息 id 字符串|null>, "has_more": true|false}`；用户列表沿用 `{"users":[],"total":N}`。
+- 消息历史排序：按 `created_at` **倒序（新→旧）**；消息/房间响应中的 `created_at` 为 Unix 毫秒整数。
+- 用户列表分页沿用 `?skip=<int>&limit=<int>`。
 
 ---
 
@@ -133,8 +136,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ### 2.3 令牌使用
 
 - 所有 `/api/v1/**` 业务接口除 `auth/login` 外都要求有效 token；
-- WebSocket 连接后**第一条业务消息必须是 `auth`**（§6.2），否则除 `ping` 外的消息一律回 `AUTH_REQUIRED`；
-- 令牌过期：HTTP 返回 `401 + 40101`；WS 返回 `auth_error/TOKEN_EXPIRED` 后可关闭连接（关闭码建议 4001）。
+- WebSocket 连接后**第一条业务消息必须是 `auth`**（§6.2）；未认证前除 `auth` 外的任何消息（含 `ping`）一律回 `error`，`code=NOT_AUTHENTICATED`，连接保持、可继续认证；
+- 令牌过期：HTTP 返回 `401 + 40101`；WS 回 `auth_error/AUTH_EXPIRED` 后关闭连接（关闭码建议 4001）。
 
 ---
 
@@ -171,14 +174,14 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | GET | `/api/v1/users/me` | 当前用户 | – | `{id,username,created_at}` |
 | POST | `/api/v1/rooms` | 创建房间（房主=当前用户） | `{name, visibility:"public"\|"private", password?, background_id?}` | `{room}` |
 | GET | `/api/v1/rooms` | 公共房间列表（分页） | `?limit&before` | `{items:[RoomSummary],has_more,next_before}` |
-| GET | `/api/v1/rooms/{room_id}` | 房间详情（成员/在线/房主/底图） | – | `{room,members:[UserSummary]}` |
-| PATCH | `/api/v1/rooms/{room_id}` | 房主改名称/底图/密码 | `{name?,background_id?,password? (null=清除)}` | `{room}` |
-| DELETE | `/api/v1/rooms/{room_id}` | 房主关闭房间 | – | `{closed:true}` |
-| POST | `/api/v1/rooms/{room_id}/join` | 加入房间 | `{password?}` | `{room,canvas_seq,background,skill_state}` |
-| POST | `/api/v1/rooms/{room_id}/leave` | 离开房间 | – | `{left:true}` |
-| GET | `/api/v1/rooms/{room_id}/messages` | 聊天历史（C） | `?before&limit` | `{items:[ChatMessage],has_more,next_before}` |
-| GET | `/api/v1/rooms/{room_id}/canvas` | 画板快照（D） | – | `{seq,canvas_size:[1920,1080],background,ops:[CanvasOp]}` |
-| GET | `/api/v1/rooms/{room_id}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
+| GET | `/api/v1/rooms/{room_id_or_code}` | 房间详情（成员/在线/房主/底图） | – | `{room,members:[UserSummary]}` |
+| PATCH | `/api/v1/rooms/{room_id_or_code}` | 房主改名称/底图/密码 | `{name?,background_id?,password? (null=清除)}` | `{room}` |
+| DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主关闭房间 | – | `{closed:true}` |
+| POST | `/api/v1/rooms/{room_id_or_code}/join` | 加入房间 | `{password?}` | `{room,canvas_seq,background,skill_state}` |
+| POST | `/api/v1/rooms/{room_id_or_code}/leave` | 离开房间 | – | `{left:true}` |
+| GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C） | `?before&limit` | `{items:[ChatMessage],has_more,next_before}` |
+| GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D） | – | `{seq,canvas_size:[1920,1080],background,ops:[CanvasOp]}` |
+| GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
 
 `RoomSummary`（公共列表字段，产品要求）：
 
@@ -311,7 +314,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 {"type":"join_room","room_id_or_code":"A1B2C","request_id":"c-123"}
 ```
 
-> `room_id_or_code` 同时接受 5 位 room_code 与内部 id，兼容旧字段 `room_code`；B2b 要求用户已通过 HTTP join 成为成员，`password` 字段忽略（HTTP 已校验）。
+> `room_id_or_code` 同时接受 5 位 room_code 与内部 id，兼容旧字段 `room_code`。**前置条件：用户必须已通过 HTTP `POST /rooms/{room_id_or_code}/join` 成为成员**，否则返回 `NOT_ROOM_MEMBER`；`password` 字段忽略（HTTP 已校验），房间不存在/已关闭返回 `ROOM_NOT_FOUND`/`ROOM_CLOSED`。
 ```json
 {"type":"chat_send","client_msg_id":"m-001","content":"大家好","content_type":"text"}
 ```
@@ -365,20 +368,27 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 {"type":"user_left","room_id":"01J8Z9K3Q7","user":{"id":"2","username":"bob"},"reason":"left","ts":1750000002000}
 ```
 
+`user_left.reason` 语义（C 起）：
+- `disconnected`：WS 连接断开（自动清理）；
+- `left`：WS `leave_room` 或 HTTP `leave` 成功（HTTP 成功后服务端主动摘除该用户 WS 会话）；
+- `kicked`：被房主通过 HTTP `kick` 踢出（同样主动摘除 WS 会话）；
+- `replaced`：同账号新连接顶号，旧连接退出。
+
 `chat_message`（C）：
 
 ```json
 {
   "type": "chat_message",
+  "id": "9f2c...",
   "room_id": "01J8Z9K3Q7",
-  "message_id": "msg_01J8Z...",
-  "client_msg_id": "m-001",
-  "sender": {"id": "1", "username": "alice"},
+  "user": {"id": "1", "username": "alice"},
   "content": "大家好",
-  "content_type": "text",
-  "ts": 1750000001500
+  "client_msg_id": "m-001",
+  "created_at": 1750000001500
 }
 ```
+
+> C1/B2b 客户端契约：字段固定为 `id` / `room_id` / `user` / `content` / `client_msg_id` / `created_at`；发送者本人也会收到广播，靠 `client_msg_id` 去重。`content_type` 暂不落库。
 
 `canvas_snapshot` / `canvas_op`（D）：
 
@@ -422,7 +432,10 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 旧 `authenticate` | **已移除**：返回 `auth_error`（`AUTH_INVALID`）并关闭 |
 | 未认证消息 | `error`，`code=NOT_AUTHENTICATED`，连接保持（可继续尝试 auth） |
 | 单用户单连接 | 新连接认证成功时关闭旧连接（close code 4000），旧连接退出房间并广播 `user_left(reason=replaced)` |
-| 已支持消息 | `auth`、`join_room`、`leave_room`、`ping`；`chat_send`/`canvas_op`/`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（C/D/E 实现） |
+| 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`ping`；`canvas_op`/`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（D/E 实现） |
+| chat_send | 需已进房；限频 5 条/秒/用户（超限 `RATE_LIMITED`）；空/超长（>2000）`INVALID_MESSAGE`；非成员 `NOT_ROOM_MEMBER`；成功后广播 `chat_message` 给房间内所有连接（含发送者），`client_msg_id` 原样回传 |
+| 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id（字符串），`limit` 默认 50/上限 100；需 JWT + 房间成员 |
+| HTTP leave/kick | 成功后服务端摘除该用户在当前房间的 WS 会话（不再收 `chat_message`，在线状态消失），并向余下成员广播 `user_left(reason=left\|kicked)` |
 | join_room | 要求已认证 + 已是房间成员（HTTP join 过）；非成员 `NOT_ROOM_MEMBER`；房间不存在 `ROOM_NOT_FOUND`；已关闭 `ROOM_CLOSED`；成功回 `room_joined{room,members}`（members 含 `online`） |
 | 离开/断线 | `leave_room` 回 `left_room` 并向房间其他成员广播 `user_left(reason=left)`；断开自动清理并广播 `user_left(reason=disconnected)` |
 | 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
@@ -463,23 +476,44 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 
 | code | 含义 |
 |---|---|
-| `AUTH_REQUIRED` | 未认证即发送需要认证的消息 |
-| `AUTH_FAILED` | token 无效/用户不存在 |
-| `TOKEN_EXPIRED` | token 过期 |
-| `FORBIDDEN` | 无权限（非房主/非成员） |
-| `ROOM_NOT_FOUND` | 房间不存在/已关闭 |
+| `NOT_AUTHENTICATED` | 未认证即发送需要认证的消息 |
+| `AUTH_INVALID` | token 无效/用户不存在/认证配置错误 |
+| `AUTH_EXPIRED` | token 过期 |
+| `ALREADY_AUTHENTICATED` | 已认证后重复发送 `auth` |
+| `NOT_ROOM_MEMBER` | 非房间成员（聊天/历史接口/未进房） |
+| `NOT_ROOM_OWNER` | 非房主执行房主操作（如踢人/关闭） |
+| `MEMBER_NOT_FOUND` | 目标成员不存在 |
+| `ROOM_NOT_FOUND` | 房间不存在 |
+| `ROOM_CLOSED` | 房间已关闭 |
 | `ROOM_PASSWORD_REQUIRED` | 私有房间需要密码 |
 | `ROOM_PASSWORD_INVALID` | 房间密码错误 |
-| `ROOM_FULL` | 房间人数已满（若设上限） |
-| `ALREADY_IN_ROOM` | 已在房间（若不做幂等） |
-| `RATE_LIMITED` | 触发限频 |
-| `INVALID_PAYLOAD` | JSON/字段/大小非法 |
-| `CANVAS_SEQ_GAP` | 画板操作序号不连续（需重同步） |
+| `ROOM_FULL` | 房间人数已满（8 人） |
+| `RATE_LIMITED` | 触发限频（聊天：5 条/秒/用户） |
+| `INVALID_MESSAGE` | 聊天内容为空/超过 2000 字符或 client_msg_id 非法 |
+| `INVALID_PAYLOAD` | JSON 对象结构/字段非法 |
+| `INVALID_JSON` | 消息不是合法 JSON |
+| `UNSUPPORTED_MESSAGE_TYPE` | 当前版本未实现的消息类型 |
+| `CANVAS_SEQ_GAP` | 画板操作序号不连续（需重同步，D 阶段） |
 | `INTERNAL_ERROR` | 服务端内部错误 |
 
 安全约定（与现有实现一致）：错误响应不含异常堆栈/SQL/连接串；服务端日志通过 `request_id`/`user_id` 对账。
 
 ---
+
+### 7.3 HTTP `data.error_code` 映射（B2a/C 实际）
+
+| error_code | HTTP | 顶层 code |
+|---|---|---|
+| `ROOM_NOT_FOUND` | 404 | 40402 |
+| `MEMBER_NOT_FOUND` | 404 | 40400 |
+| `NOT_ROOM_MEMBER` / `NOT_ROOM_OWNER` | 403 | 40300 |
+| `ROOM_PASSWORD_REQUIRED` / `ROOM_PASSWORD_INVALID` / `ROOM_NAME_INVALID` / `INVALID_BACKGROUND` / `INVALID_VISIBILITY` / `ROOM_PASSWORD_NOT_ALLOWED` / `CANNOT_KICK_OWNER` / `INVALID_PAGINATION` / `INVALID_CURSOR` / `INVALID_MESSAGE` | 400 | 40000 |
+| `ROOM_FULL` / `ROOM_OWNER_MUST_CLOSE` | 409 | 40900 |
+| `ROOM_CLOSED` | 409 | 40901 |
+| `RATE_LIMITED` | 429 | 42900 |
+| `ROOM_CODE_GENERATION_FAILED` | 500 | 50000 |
+
+成功响应的 `data` 为业务数据；错误响应 `data={"error_code":"..."}`，客户端按该字符串分支（如弹房间密码框）。
 
 ## 8. 技能共享（里程碑 E）
 
