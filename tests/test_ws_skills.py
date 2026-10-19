@@ -51,13 +51,19 @@ def skill_payload(room_id="room-1", **overrides):
 
 
 def state_payload(user_id="1", nickname="Alice"):
+    skills = []
+    for item in skill_payload()["skills"]:
+        normalized = dict(item)
+        normalized.setdefault("ready_at", 1792400004500)
+        skills.append(normalized)
     return {
         "user_id": user_id,
         "nickname": nickname,
         "operator_id": "op-1",
         "operator_name": "干员",
-        "skills": skill_payload()["skills"],
+        "skills": skills,
         "captured_at": 1792400000000,
+        "server_received_at": 1792400000002,
         "updated_at": 1792400000001,
     }
 
@@ -116,7 +122,9 @@ class SkillUpdateTests(WsSkillTestCase):
             self.assertEqual("op-1", event["operator_id"])
             self.assertEqual(3, len(event["skills"]))
             self.assertEqual(1792400000000, event["captured_at"])
+            self.assertEqual(1792400000002, event["server_received_at"])
             self.assertEqual(1792400000001, event["updated_at"])
+            self.assertEqual(1792400004500, event["skills"][0]["ready_at"])
 
     async def test_invalid_payload_rejected_without_save_or_broadcast(self):
         for payload in (
