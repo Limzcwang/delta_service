@@ -12,14 +12,26 @@ from api.v1_common import (
     APIError,
     CODE_BAD_REQUEST,
     CODE_INTERNAL,
+    CODE_RATE_LIMITED,
     CODE_UNAUTHORIZED,
     ok,
 )
 from log.logger import log_exception
+from security.login_limit import build_login_rate_limiter
 from security.tokens import TokenConfigError, create_access_token
 from service.user import UserService
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
+
+# 登录限频（内存、按 IP、5 次/分钟，可由 LOGIN_RATE_LIMIT_PER_MIN 调整）。
+# 测试可直接替换本模块的 login_rate_limiter 注入假时钟。
+login_rate_limiter = build_login_rate_limiter()
+
+
+def _client_ip(request: Any) -> str:
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None) if client is not None else None
+    return host or "unknown"
 
 
 class LoginRequest(BaseModel):
@@ -46,6 +58,16 @@ async def login(request: Request, payload: LoginRequest):
 
     口令校验复用 service 层（scrypt + 旧明文兼容）；失败统一 401，不区分用户是否存在。
     """
+    client_ip = _client_ip(request)
+    if not login_rate_limiter.check(client_ip):
+        retry_after = login_rate_limiter.retry_after(client_ip)
+        raise APIError(
+            429,
+            CODE_RATE_LIMITED,
+            "登录尝试过于频繁，请稍后再试",
+            headers={"Retry-After": str(max(retry_after, 1))},
+        )
+
     username = (payload.username or "").strip()
     password = payload.password or ""
     if not username or not password:

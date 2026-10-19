@@ -26,6 +26,7 @@ from api import deps as auth_deps  # noqa: E402
 from api import v1_auth, v1_common  # noqa: E402
 from log.logger import logger as service_logger  # noqa: E402
 from security import tokens  # noqa: E402
+from security.login_limit import LoginRateLimiter  # noqa: E402
 
 SECRET = "unit-test-jwt-secret-0123456789abcdef"
 
@@ -54,6 +55,15 @@ class AuthTestCase(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        # 隔离登录限频：避免同 IP 的多个用例互相计数
+        self._original_limiter = v1_auth.login_rate_limiter
+        v1_auth.login_rate_limiter = LoginRateLimiter(
+            max_attempts=1000, window_seconds=60
+        )
+        self.addCleanup(
+            setattr, v1_auth, "login_rate_limiter", self._original_limiter
+        )
 
 
 class GetCurrentUserTests(AuthTestCase, unittest.IsolatedAsyncioTestCase):
