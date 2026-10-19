@@ -206,10 +206,14 @@ async def list_messages(
     has_more = len(messages) > limit
     page = messages[:limit]
     next_before = page[-1].id if has_more and page else None
+    # 窗口截断：房间仍有早于窗口下界的消息（客户端据此显示“仅最近 N 天”）
+    truncated = bool(await MessageDao.has_older_than(room.id, since))
     return {
         "items": [message_to_dict(message) for message in page],
         "has_more": has_more,
         "next_before": next_before,
+        "window_days": window_days,
+        "truncated": truncated,
     }
 
 

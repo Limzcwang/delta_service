@@ -293,6 +293,21 @@ class WebSocketManager:
             "nickname": getattr(user, "nickname", None) or "",
         }
 
+    async def _refresh_user(self, session: ClientSession):
+        """从 DB 实时刷新 session 缓存的 user（昵称修改后无需重连）。"""
+        if session.user_id is None:
+            return session.user
+        try:
+            fresh = await UserDao.get_user_by_id(int(session.user_id))
+        except (TypeError, ValueError):
+            fresh = None
+        except Exception as exc:  # pragma: no cover - DB 异常保留旧缓存
+            log_exception(exc, "刷新 WS 用户缓存失败", {"user_id": session.user_id})
+            fresh = None
+        if fresh is not None:
+            session.user = fresh
+        return session.user
+
     def room_online_user_ids(self, room_id: str) -> Set[str]:
         return {
             session.user_id
@@ -367,6 +382,7 @@ class WebSocketManager:
         session.canvas_rev = None
 
         await self._send_room_joined(session, room, members)
+        await self._refresh_user(session)
         await self.broadcast_to_room(
             room.id,
             self._user_event(
@@ -408,6 +424,7 @@ class WebSocketManager:
         session.room_id = None
         session.room_code = None
         session.canvas_rev = None
+        await self._refresh_user(session)
         await self.broadcast_to_room(
             room_id,
             self._user_event(
@@ -454,6 +471,7 @@ class WebSocketManager:
             return
 
         try:
+            await self._refresh_user(session)
             message = await messages_service.send_message(
                 session.user, room, content, client_msg_id
             )
@@ -490,7 +508,7 @@ class WebSocketManager:
             return False
 
         room_code = session.room_code
-        user = session.user
+        user = await self._refresh_user(session)
         session.room_id = None
         session.room_code = None
         session.canvas_rev = None
@@ -728,7 +746,7 @@ class WebSocketManager:
         """清理连接状态：退出房间频道、广播 user_left、移除映射（幂等）。"""
         room_id = session.room_id
         room_code = session.room_code
-        user = session.user
+        user = await self._refresh_user(session)
 
         if room_id is not None and user is not None:
             await self.broadcast_to_room(

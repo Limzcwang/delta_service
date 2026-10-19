@@ -60,6 +60,8 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
             ],
             "has_more": True,
             "next_before": "m1",
+            "window_days": 30,
+            "truncated": True,
         }
         with mock.patch.object(
             v1_rooms.rooms_service,
@@ -84,6 +86,8 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(200, response["code"])
         self.assertEqual("req_chat", response["request_id"])
         self.assertEqual(page, response["data"])
+        self.assertEqual(30, response["data"]["window_days"])
+        self.assertTrue(response["data"]["truncated"])
 
     async def test_history_default_limit_is_50(self):
         with mock.patch.object(

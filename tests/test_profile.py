@@ -504,6 +504,9 @@ class HistoryWindowTests(unittest.IsolatedAsyncioTestCase):
                 self.since = since
                 return list(self.rows)
 
+            async def has_older_than(self, room_id, cutoff):
+                return False
+
         dao = FakeDao()
         room = SimpleNamespace(id="r1")
         now = datetime.now()
@@ -512,6 +515,8 @@ class HistoryWindowTests(unittest.IsolatedAsyncioTestCase):
                 room, limit=10, joined_at=now - timedelta(days=8)
             )
             self.assertFalse(page["has_more"])
+            self.assertEqual(30, page["window_days"])
+            self.assertFalse(page["truncated"])
             self.assertIsNotNone(dao.since)
             self.assertGreaterEqual(now - dao.since, timedelta(days=29, hours=23))
 
@@ -542,6 +547,9 @@ class HistoryNicknameRealtimeTests(unittest.IsolatedAsyncioTestCase):
         class FakeDao:
             async def list_for_room(self, room_id, before=None, limit=50, since=None):
                 return [message]
+
+            async def has_older_than(self, room_id, cutoff):
+                return False
 
         room = SimpleNamespace(id="r1")
         with mock.patch.object(messages_service, "MessageDao", FakeDao()):
