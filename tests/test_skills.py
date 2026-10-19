@@ -130,6 +130,7 @@ class FakeSkillDao:
         self.upserts.append((room.id, user.id, data))
         if self.record is None:
             self.record = make_record(user=user, data=data)
+            self.records.append(self.record)
         else:
             self.record.data = data
         return self.record
@@ -166,6 +167,57 @@ class SkillStateServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Alice", state["nickname"])
         self.assertEqual(3, len(state["skills"]))
         self.assertEqual(int(NOW.timestamp() * 1000), state["updated_at"])
+
+    async def test_server_folds_network_delay(self):
+        now = 1792400001000
+        payload = make_payload(
+            captured_at=now - 500,
+        )
+        payload["skills"][0]["remaining_ms"] = 5000
+        state = await skills_service.save_state(
+            self.room, self.user, payload, now_ms=now
+        )
+        slot0 = state["skills"][0]
+        self.assertEqual(4500, slot0["remaining_ms"])
+        self.assertEqual(now + 4500, slot0["ready_at"])
+        self.assertEqual(now, state["server_received_at"])
+        self.assertEqual(now - 500, state["captured_at"])
+        # 保留原字段
+        self.assertEqual("op-1", state["operator_id"])
+
+        listed = await skills_service.list_states("room-1", now=NOW)
+        self.assertEqual(1, len(listed))
+        self.assertEqual(now, listed[0]["server_received_at"])
+        self.assertEqual(now + 4500, listed[0]["skills"][0]["ready_at"])
+        self.assertEqual(now - 500, listed[0]["captured_at"])
+
+    async def test_server_folds_future_and_old_captured_at(self):
+        now = 1792400001000
+        future = make_payload(captured_at=now + 5000)
+        future["skills"][0]["remaining_ms"] = 5000
+        state = await skills_service.save_state(
+            self.room, self.user, future, now_ms=now
+        )
+        self.assertEqual(5000, state["skills"][0]["remaining_ms"])
+        self.assertEqual(now + 5000, state["skills"][0]["ready_at"])
+
+        old = make_payload(captured_at=now - 11000)
+        old["skills"][0]["remaining_ms"] = 5000
+        state = await skills_service.save_state(
+            self.room, self.user, old, now_ms=now
+        )
+        self.assertEqual(0, state["skills"][0]["remaining_ms"])
+        self.assertEqual(now, state["skills"][0]["ready_at"])
+
+    async def test_server_clamps_negative_remaining(self):
+        now = 1792400001000
+        payload = make_payload(captured_at=now - 2000)
+        payload["skills"][0]["remaining_ms"] = 1000
+        state = await skills_service.save_state(
+            self.room, self.user, payload, now_ms=now
+        )
+        self.assertEqual(0, state["skills"][0]["remaining_ms"])
+        self.assertEqual(now, state["skills"][0]["ready_at"])
 
     async def test_list_states_filters_stale(self):
         fresh = make_record(user=make_user(1, "Alice"), updated_at=NOW)

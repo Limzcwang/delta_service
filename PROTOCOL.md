@@ -541,10 +541,20 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 
 ```json
 {"type":"skill_share_state","user_id":"1","nickname":"Alice","operator_id":"op-1","operator_name":"干员",
- "skills":[...],"captured_at":1750000000123,"updated_at":1750000000200}
+ "skills":[
+   {"slot":0,"state":"charging","remaining_ms":4500,"ready_at":1750000004500,"charges":0,"max_charges":1,"pct":30}
+ ],
+ "captured_at":1750000000123,"server_received_at":1750000001623,"updated_at":1750000001700}
 ```
 
-服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。
+- **服务端权威折算**：`now = server_now()`（服务器时钟毫秒）；`age = now - captured_at`；
+  `adjusted = max(0, remaining_ms - age)`；`ready_at = now + adjusted`（**绝对就绪时刻，服务器时钟毫秒，整数**）。
+  - `captured_at` 在未来（客户端时钟漂移）→ age 按 0 处理，不放大剩余时间；
+  - `captured_at` 超过 10 秒未达服务端 → 视为过期，`adjusted = 0`、`ready_at = now`；
+  - 折算为负 → 0。
+- 下发的 `skills[].remaining_ms` 是**服务端收到时刻**的剩余量，`ready_at` 为绝对时刻；客户端渲染倒计时用 `ready_at - server_now`（不要再用 captured_at 自行折算）。
+- `captured_at` 原样保留用于审计；`server_received_at` 为本次服务端收到时间；二者均为毫秒。
+- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at` 与 `skills[].ready_at`。
 
 **新成员**：`room_joined.skill_states` 为当前房间所有人最新状态的数组（结构同上，stale 已过滤）。
 

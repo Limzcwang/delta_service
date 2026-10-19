@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +18,7 @@ MAX_CHARGES = 9
 MAX_PERCENT = 100
 MAX_OPERATOR_LENGTH = 32
 STALE_AFTER_SECONDS = 30 * 60
+STALE_CAPTURE_MS = 10_000  # captured_at 超过 10 秒视为过期状态
 
 ERR_INVALID_SKILL_PAYLOAD = "INVALID_SKILL_PAYLOAD"
 
@@ -120,6 +122,9 @@ def state_to_dict(record) -> Dict[str, Any]:
         "operator_name": data.get("operator_name", ""),
         "skills": data.get("skills", []),
         "captured_at": data.get("captured_at"),
+        "server_received_at": data.get("server_received_at")
+        if data.get("server_received_at") is not None
+        else _dt_to_ms(getattr(record, "updated_at", None)),
         "updated_at": _dt_to_ms(getattr(record, "updated_at", None)),
     }
 
@@ -132,8 +137,40 @@ def is_stale(record, now: Optional[datetime] = None) -> bool:
     return (now - updated_at) > timedelta(seconds=STALE_AFTER_SECONDS)
 
 
-async def save_state(room, user, payload: Any) -> Dict[str, Any]:
+def _adjust_skills(skills: List[Dict[str, Any]], now_ms: int, captured_at: int) -> List[Dict[str, Any]]:
+    """服务端权威折算：按到达时间把 remaining_ms 扣减为 adjusted，并给绝对 ready_at。"""
+    age_ms = now_ms - captured_at
+    too_old = age_ms > STALE_CAPTURE_MS
+    if age_ms < 0:
+        # 客户端时钟漂移/未来时间：不放大剩余时间
+        age_ms = 0
+    adjusted_skills = []
+    for item in skills:
+        if too_old:
+            # 旧状态：视为已过期，不再把旧 remaining 当新状态
+            adjusted = 0
+        else:
+            adjusted = max(0, int(item.get("remaining_ms", 0)) - age_ms)
+        normalized = dict(item)
+        normalized["remaining_ms"] = adjusted
+        normalized["ready_at"] = int(now_ms + adjusted)
+        adjusted_skills.append(normalized)
+    return adjusted_skills
+
+
+def server_now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+async def save_state(
+    room, user, payload: Any, now_ms: Optional[int] = None
+) -> Dict[str, Any]:
     data = validate_skill_payload(payload)
+    now_ms = int(now_ms if now_ms is not None else server_now_ms())
+    data["skills"] = _adjust_skills(
+        data["skills"], now_ms, int(data["captured_at"])
+    )
+    data["server_received_at"] = now_ms
     record = await SkillStateDao.upsert(room, user, data)
     return state_to_dict(record)
 
