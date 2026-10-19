@@ -1,5 +1,6 @@
 """SQL执行日志中间件"""
 
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -109,12 +110,31 @@ class SQLLoggerMiddleware:
 # 全局SQL日志中间件实例
 sql_logger_middleware = SQLLoggerMiddleware()
 
+# 初始化幂等保护：
+# main.init_services() 与 api/init.py 的 startup 都会调用 init_sql_logging()，
+# 这里保证中间件只注册一次，避免同一条 SQL 被记录两次。
+_sql_logging_lock = threading.Lock()
+_sql_logging_initialized = False
+
+
+def is_sql_logging_initialized() -> bool:
+    """SQL 日志是否已初始化（供测试/诊断使用）。"""
+    return _sql_logging_initialized
+
 
 async def init_sql_logging():
     """初始化SQL日志记录
-    
-    为所有数据库连接添加SQL日志中间件
+
+    为所有数据库连接添加SQL日志中间件；重复调用只生效一次（幂等）。
     """
+    global _sql_logging_initialized
+
+    with _sql_logging_lock:
+        if _sql_logging_initialized:
+            return
+        # 先占位，保证并发调用下也只有一次进入注册逻辑
+        _sql_logging_initialized = True
+
     try:
         # 使用Tortoise.get_connection()获取默认连接
         from tortoise import Tortoise
