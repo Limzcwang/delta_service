@@ -49,7 +49,7 @@ ERR_ROOM_NAME_INVALID = "ROOM_NAME_INVALID"
 ERR_ROOM_OWNER_MUST_CLOSE = "ROOM_OWNER_MUST_CLOSE"
 ERR_CANNOT_KICK_OWNER = "CANNOT_KICK_OWNER"
 ERR_INVALID_VISIBILITY = "INVALID_VISIBILITY"
-ERR_ROOM_PASSWORD_NOT_ALLOWED = "ROOM_PASSWORD_NOT_ALLOWED"
+ERR_INVALID_ROOM_PAYLOAD = "INVALID_ROOM_PAYLOAD"
 ERR_ROOM_FORBIDDEN = "ROOM_FORBIDDEN"
 
 
@@ -426,7 +426,9 @@ async def update_room(owner, room_id_or_code: str, changes: Dict[str, Any]) -> R
         else:
             if room.visibility != VISIBILITY_PRIVATE:
                 raise RoomError(
-                    ERR_ROOM_PASSWORD_NOT_ALLOWED, "公共房间不能设置密码", 400
+                    ERR_INVALID_ROOM_PAYLOAD,
+                    "公开房不支持设置密码；如需加密请新建私有房",
+                    400,
                 )
             fields["password_hash"] = hash_password(
                 _validate_room_password(new_password)

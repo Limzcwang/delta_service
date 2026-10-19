@@ -473,7 +473,7 @@ class KickCloseUpdateTests(RoomServiceTestCase):
                 rooms.update_room(make_user(1), room.id, {"password": "new-pass"})
             )
         self.assertEqual(
-            rooms.ERR_ROOM_PASSWORD_NOT_ALLOWED, ctx.exception.error_code
+            rooms.ERR_INVALID_ROOM_PAYLOAD, ctx.exception.error_code
         )
 
     @staticmethod

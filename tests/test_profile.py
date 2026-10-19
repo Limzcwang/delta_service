@@ -170,6 +170,56 @@ class NicknameApiTests(unittest.IsolatedAsyncioTestCase):
         update.assert_not_awaited()
 
 
+class RegisterPasswordTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        env = mock.patch.dict(
+            os.environ,
+            {"JWT_SECRET": "unit-test-jwt-secret-0123456789abcdef"},
+            clear=False,
+        )
+        env.start()
+        self.addCleanup(env.stop)
+
+    async def test_registration_password_8_to_64(self):
+        for password in ("123456", "1234567"):
+            with self.subTest(length=len(password)):
+                with self.assertRaises(v1_common.APIError) as ctx:
+                    await v1_auth.register(
+                        DummyRequest(),
+                        SimpleNamespace(username="abc123", password=password),
+                    )
+                self.assertEqual("INVALID_NEW_PASSWORD", ctx.exception.error_code)
+
+        for password, ok in (("12345678", True), ("x" * 64, True), ("x" * 65, False)):
+            with self.subTest(length=len(password)):
+                with mock.patch.object(
+                    v1_auth.UserService,
+                    "create_user",
+                    new=mock.AsyncMock(
+                        return_value={
+                            "success": True,
+                            "user": {"id": 1, "username": "abc123", "nickname": "abc123"},
+                        }
+                    ),
+                ) as create:
+                    if ok:
+                        response = await v1_auth.register(
+                            DummyRequest(),
+                            SimpleNamespace(username="abc123", password=password),
+                        )
+                        self.assertEqual(200, response["code"])
+                    else:
+                        with self.assertRaises(v1_common.APIError) as ctx:
+                            await v1_auth.register(
+                                DummyRequest(),
+                                SimpleNamespace(username="abc123", password=password),
+                            )
+                        self.assertEqual(
+                            "INVALID_NEW_PASSWORD", ctx.exception.error_code
+                        )
+                        create.assert_not_awaited()
+
+
 class OldAccountLoginTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_short_username_can_still_login(self):
         env = mock.patch.dict(
@@ -476,6 +526,38 @@ class HistoryWindowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ERR_INVALID_PAGINATION, ctx.exception.error_code)
 
 
+class HistoryNicknameRealtimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_history_nickname_reflects_current_user(self):
+        now = datetime.now()
+        user = SimpleNamespace(id=5, username="alice", nickname="旧昵称")
+        message = SimpleNamespace(
+            id="m1",
+            room_id="r1",
+            user=user,
+            content="hi",
+            client_msg_id=None,
+            created_at=now,
+        )
+
+        class FakeDao:
+            async def list_for_room(self, room_id, before=None, limit=50, since=None):
+                return [message]
+
+        room = SimpleNamespace(id="r1")
+        with mock.patch.object(messages_service, "MessageDao", FakeDao()):
+            first = await messages_service.list_messages(
+                room, limit=10, joined_at=now
+            )
+            self.assertEqual("旧昵称", first["items"][0]["user"]["nickname"])
+
+            user.nickname = "新昵称"
+            second = await messages_service.list_messages(
+                room, limit=10, joined_at=now
+            )
+            self.assertEqual("新昵称", second["items"][0]["user"]["nickname"])
+            self.assertNotIn("username", second["items"][0]["user"])
+
+
 class RoomApiF2F3Tests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.user = make_user()
@@ -535,14 +617,21 @@ class MigrationScriptTests(unittest.TestCase):
         import scripts.migrate_f as migration
 
         class FakeCursor:
-            def __init__(self, existing):
+            def __init__(self, existing, tables=("users", "rooms")):
                 self.existing = set(existing)
+                self.tables = set(tables)
                 self.executed = []
                 self.rowcount = 0
+                self._result = None
 
             def execute(self, sql, params=None):
                 self.executed.append((sql, params))
-                if sql.startswith("SELECT COUNT(*)"):
+                if sql.startswith("SELECT 1 FROM"):
+                    table = sql.split()[3]
+                    if table not in self.tables:
+                        raise RuntimeError(f"no such table: {table}")
+                    self._result = (1,)
+                elif sql.startswith("SELECT COUNT(*)"):
                     self._result = (1 if (params[0], params[1]) in self.existing else 0,)
                 elif "UPDATE users SET nickname" in sql:
                     self.rowcount = 3
@@ -560,8 +649,8 @@ class MigrationScriptTests(unittest.TestCase):
                 pass
 
         class FakeConnection:
-            def __init__(self, existing):
-                self.cursor_obj = FakeCursor(existing)
+            def __init__(self, existing, tables=("users", "rooms")):
+                self.cursor_obj = FakeCursor(existing, tables)
                 self.commits = 0
 
             def cursor(self):
@@ -589,6 +678,21 @@ class MigrationScriptTests(unittest.TestCase):
         self.assertEqual([], alters2)
         self.assertEqual(0, stats2["nickname_added"])
         self.assertEqual(0, stats2["deleted_added"])
+
+        # 空库（应用还未 generate_schemas）：安全跳过，不 ALTER 不 UPDATE
+        connection3 = FakeConnection(existing=set(), tables=())
+        stats3 = migration.migrate(connection3)
+        self.assertEqual(2, stats3["skipped_missing_tables"])
+        self.assertEqual(0, stats3["nickname_added"])
+        self.assertEqual(0, stats3["deleted_added"])
+        self.assertEqual(
+            [],
+            [
+                sql
+                for sql, _ in connection3.cursor_obj.executed
+                if sql.startswith("ALTER") or "UPDATE users" in sql
+            ],
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

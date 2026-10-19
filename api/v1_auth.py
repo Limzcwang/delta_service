@@ -66,7 +66,8 @@ class ChangePasswordRequest(BaseModel):
 
 # F1：新注册用户名 6–20 位字母/数字，且至少一个字母；大小写敏感；老账号不受影响。
 _USERNAME_RE = re.compile(r"^(?=.*[A-Za-z])[A-Za-z0-9]{6,20}$")
-_PASSWORD_MIN_LENGTH = 6
+_PASSWORD_MIN_LENGTH = 8
+_PASSWORD_MAX_LENGTH = 64
 NICKNAME_MIN_LENGTH = 1
 NICKNAME_MAX_LENGTH = 20
 NEW_PASSWORD_MIN_LENGTH = 8
@@ -186,11 +187,12 @@ async def register(request: Request, payload: RegisterRequest):
     """创建用户并直接返回与登录一致的 token 响应。"""
     username = _validate_username(payload.username or "")
     password = payload.password or ""
-    if len(password) < _PASSWORD_MIN_LENGTH:
+    if not _PASSWORD_MIN_LENGTH <= len(password) <= _PASSWORD_MAX_LENGTH:
         raise APIError(
             400,
             CODE_BAD_REQUEST,
-            f"密码长度不能少于 {_PASSWORD_MIN_LENGTH} 个字符",
+            f"密码长度需在 {_PASSWORD_MIN_LENGTH}-{_PASSWORD_MAX_LENGTH} 个字符之间",
+            error_code="INVALID_NEW_PASSWORD",
         )
 
     result = await UserService.create_user(username, password)

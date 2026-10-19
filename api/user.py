@@ -85,10 +85,10 @@ async def create_user(request: CreateUserRequest):
 
     # 如果提供了密码，进行密码强度验证
     if request.password:
-        if len(request.password) < 6:
+        if not 8 <= len(request.password) <= 64:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="密码长度不能少于6个字符"
+                detail="密码长度需在8-64个字符之间"
             )
 
     result = await UserService.create_user(request.username.strip(), request.password)

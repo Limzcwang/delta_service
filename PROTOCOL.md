@@ -146,6 +146,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - **username 仅本人可见**：登录/注册/`GET /users/me` 可返回自己的 `username`；房间成员、chat_message.user、user_joined/user_left、房主信息等所有他人可见接口/事件只返回 `nickname`。
 - 新注册用户名：**6–20 位 `[A-Za-z0-9]`，至少一个字母，大小写敏感**；老账号登录不受影响。
 - 昵称：`PATCH /api/v1/users/me {nickname}`，1–20 字符，去首尾空白/控制字符，不要求唯一；后续展示实时取 nickname。
+- 新注册密码：**8–64 字符**（与改密一致）；6–7 位拒绝 `INVALID_NEW_PASSWORD`；老账号登录不受影响。
 - 改密码：`POST /api/v1/users/me/password {old_password,new_password}`；旧密码错 `WRONG_OLD_PASSWORD`；新密码 8–64；成功不吊销已签发 token。
 
 ---
@@ -180,6 +181,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 方法 | 路径 | 说明 | 请求 | 响应 `data` |
 |---|---|---|---|---|
 | POST | `/api/v1/auth/login` | 登录签发 JWT | `{username,password}` | `{access_token,token_type,expires_in,user}` |
+| POST | `/api/v1/auth/register` | 注册并签发 JWT | `{username,password}`（username 6–20 位字母数字含字母；password 8–64） | 同登录 |
 | GET | `/api/v1/users/me` | 当前用户（本人可看 username） | – | `{id,username,nickname,created_at}` |
 | PATCH | `/api/v1/users/me` | 修改昵称 | `{nickname}` | `{user:{id,username,nickname}}` |
 | POST | `/api/v1/users/me/password` | 修改密码 | `{old_password,new_password}` | `{changed:true}` |
@@ -550,7 +552,8 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `INVALID_USERNAME` | 新注册用户名不符合 6–20 位字母/数字且至少一个字母 |
 | `INVALID_NICKNAME` | 昵称为空/超 20 字符/控制字符清理后为空 |
 | `WRONG_OLD_PASSWORD` | 改密码时旧密码错误 |
-| `INVALID_NEW_PASSWORD` | 新密码长度不在 8–64 |
+| `INVALID_NEW_PASSWORD` | 新密码/注册密码长度不在 8–64 |
+| `INVALID_ROOM_PAYLOAD` | 房间 PATCH 载荷不合法（如公开房设置密码；语义：公开房不支持设置密码，如需加密请新建私有房） |
 | `INVALID_PAYLOAD` | JSON 对象结构/字段非法 |
 | `INVALID_JSON` | 消息不是合法 JSON |
 | `UNSUPPORTED_MESSAGE_TYPE` | 当前版本未实现的消息类型 |
@@ -569,7 +572,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ROOM_NOT_FOUND` | 404 | 40402 |
 | `MEMBER_NOT_FOUND` | 404 | 40400 |
 | `NOT_ROOM_MEMBER` / `NOT_ROOM_OWNER` | 403 | 40300 |
-| `ROOM_PASSWORD_REQUIRED` / `ROOM_PASSWORD_INVALID` / `ROOM_NAME_INVALID` / `INVALID_BACKGROUND` / `INVALID_VISIBILITY` / `ROOM_PASSWORD_NOT_ALLOWED` / `CANNOT_KICK_OWNER` / `INVALID_PAGINATION` / `INVALID_CURSOR` / `INVALID_MESSAGE` | 400 | 40000 |
+| `ROOM_PASSWORD_REQUIRED` / `ROOM_PASSWORD_INVALID` / `ROOM_NAME_INVALID` / `INVALID_BACKGROUND` / `INVALID_VISIBILITY` / `INVALID_ROOM_PAYLOAD` / `CANNOT_KICK_OWNER` / `INVALID_PAGINATION` / `INVALID_CURSOR` / `INVALID_MESSAGE` | 400 | 40000 |
 | `ROOM_FULL` / `ROOM_OWNER_MUST_CLOSE` | 409 | 40900 |
 | `ROOM_CLOSED` | 409 | 40901 |
 | `RATE_LIMITED` | 429 | 42900 |
