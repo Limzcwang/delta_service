@@ -27,6 +27,7 @@ from log.logger import log_exception
 from service import canvas as canvas_service
 from service import messages as messages_service
 from service import rooms as rooms_service
+from service import skills as skills_service
 from service.canvas import CanvasError
 from service.messages import MessageError
 from service.rooms import RoomError
@@ -260,6 +261,24 @@ async def get_room_canvas(
     return ok(snapshot, request=request)
 
 
+@router.get("/rooms/{room_id_or_code}/skills", summary="房间技能共享状态")
+async def get_room_skills(
+    request: Request,
+    room_id_or_code: str,
+    user=Depends(get_current_user),
+):
+    """JWT + 房间成员；返回未 stale 的技能共享状态。"""
+    try:
+        room, _members = await rooms_service.get_room_for_member(
+            room_id_or_code, user
+        )
+        items = await skills_service.list_states(room.id)
+    except RoomError as exc:
+        _raise_room_error(exc)
+
+    return ok({"items": items}, request=request)
+
+
 @router.get("/rooms/{room_id_or_code}/messages", summary="房间历史消息")
 async def list_room_messages(
     request: Request,
@@ -323,6 +342,12 @@ async def close_room(
         room = await rooms_service.delete_room(user, room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # E1：软删房间清理所有技能共享状态（含离线成员）
+    try:
+        await skills_service.clear_room(room.id)
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "软删房间清理技能状态失败", {"room": room_id_or_code})
 
     # F2：画板落盘 → 广播 room_deleted → 摘除全房 WS 会话（已删则上述基本为空操作）
     try:
