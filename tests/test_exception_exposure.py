@@ -181,7 +181,7 @@ class UserServiceErrorMessagesTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(capture.records)
 
     async def test_success_message_unchanged(self):
-        fake_user = SimpleNamespace(id=1, username="alice")
+        fake_user = SimpleNamespace(id=1, username="alice", nickname="alice")
         with mock.patch.object(
             user_service.UserDao, "create_user", new=mock.AsyncMock(return_value=fake_user)
         ), capture_logger(service_logger):
@@ -189,7 +189,7 @@ class UserServiceErrorMessagesTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual("用户创建成功", result["message"])
-        self.assertEqual({"id": 1, "username": "alice"}, result["user"])
+        self.assertEqual({"id": 1, "username": "alice", "nickname": "alice"}, result["user"])
 
 
 class UserApiErrorDetailTests(unittest.IsolatedAsyncioTestCase):
@@ -203,7 +203,7 @@ class UserApiErrorDetailTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(user_api.HTTPException) as ctx:
                 await user_api.create_user(
-                    SimpleNamespace(username="alice", password="Pa55w0rd!")
+                    SimpleNamespace(username="alice01", password="Pa55w0rd!")
                 )
 
         http_exc = ctx.exception
@@ -233,7 +233,7 @@ class UserApiErrorDetailTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(user_api.HTTPException) as ctx:
                 await user_api.login(
-                    SimpleNamespace(username="alice", password="Pa55w0rd!")
+                    SimpleNamespace(username="alice01", password="Pa55w0rd!")
                 )
 
         http_exc = ctx.exception

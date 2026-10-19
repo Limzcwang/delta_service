@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
@@ -43,6 +44,7 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.user = make_user()
         self.room = make_room()
+        self.membership = SimpleNamespace(joined_at=datetime(2026, 1, 1, 0, 0, 0))
 
     async def test_history_success_envelope(self):
         page = {
@@ -61,8 +63,8 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
         }
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "get_room_for_member",
-            new=mock.AsyncMock(return_value=(self.room, [])),
+            "get_room_membership",
+            new=mock.AsyncMock(return_value=(self.room, self.membership)),
         ) as get_room, mock.patch.object(
             v1_rooms.messages_service,
             "list_messages",
@@ -73,7 +75,12 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
             )
 
         get_room.assert_awaited_once_with("A1B2C", self.user)
-        list_messages.assert_awaited_once_with(self.room, before="m2", limit=20)
+        list_messages.assert_awaited_once_with(
+            self.room,
+            before="m2",
+            limit=20,
+            joined_at=self.membership.joined_at,
+        )
         self.assertEqual(200, response["code"])
         self.assertEqual("req_chat", response["request_id"])
         self.assertEqual(page, response["data"])
@@ -81,8 +88,8 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_history_default_limit_is_50(self):
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "get_room_for_member",
-            new=mock.AsyncMock(return_value=(self.room, [])),
+            "get_room_membership",
+            new=mock.AsyncMock(return_value=(self.room, self.membership)),
         ), mock.patch.object(
             v1_rooms.messages_service,
             "list_messages",
@@ -96,7 +103,7 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_non_member_returns_not_room_member(self):
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "get_room_for_member",
+            "get_room_membership",
             new=mock.AsyncMock(
                 side_effect=RoomError(ERR_NOT_ROOM_MEMBER, "你不在该房间中", 403)
             ),
@@ -112,8 +119,8 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_pagination_maps_to_400(self):
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "get_room_for_member",
-            new=mock.AsyncMock(return_value=(self.room, [])),
+            "get_room_membership",
+            new=mock.AsyncMock(return_value=(self.room, self.membership)),
         ), mock.patch.object(
             v1_rooms.messages_service,
             "list_messages",
@@ -132,7 +139,7 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_room_not_found_maps_to_404(self):
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "get_room_for_member",
+            "get_room_membership",
             new=mock.AsyncMock(
                 side_effect=RoomError(
                     v1_rooms.rooms_service.ERR_ROOM_NOT_FOUND, "房间不存在", 404
@@ -151,7 +158,7 @@ class ChatHistoryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_error_body_contains_error_code(self):
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "get_room_for_member",
+            "get_room_membership",
             new=mock.AsyncMock(
                 side_effect=RoomError(ERR_NOT_ROOM_MEMBER, "你不在该房间中", 403)
             ),

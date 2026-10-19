@@ -18,7 +18,11 @@ class UserService:
     """用户服务类"""
 
     @staticmethod
-    async def create_user(username: str, password: Optional[str] = None) -> Dict[str, Any]:
+    async def create_user(
+        username: str,
+        password: Optional[str] = None,
+        nickname: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """创建用户
         
         Args:
@@ -32,7 +36,9 @@ class UserService:
             # 口令只以哈希形式写库；password 为空（None/""）时保持 None。
             stored_password = hash_password(password) if password else None
             # 调用数据访问层创建用户
-            user = await UserDao.create_user(username, stored_password)
+            user = await UserDao.create_user(
+                username, stored_password, nickname=nickname
+            )
             
             # 记录业务事件
             log_business_event("user_created", username, details={"action": "创建用户"})
@@ -42,7 +48,8 @@ class UserService:
                 "message": "用户创建成功",
                 "user": {
                     "id": user.id,
-                    "username": user.username
+                    "username": user.username,
+                    "nickname": getattr(user, "nickname", None) or user.username,
                 }
             }
                 
@@ -73,6 +80,7 @@ class UserService:
                     "user": {
                         "id": user.id,
                         "username": user.username,
+                        "nickname": getattr(user, "nickname", None) or user.username,
                         "created_at": user.created_at,
                         "updated_at": user.updated_at
                     }
@@ -110,6 +118,7 @@ class UserService:
                     "user": {
                         "id": user.id,
                         "username": user.username,
+                        "nickname": getattr(user, "nickname", None) or user.username,
                         "created_at": user.created_at,
                         "updated_at": user.updated_at
                     }
@@ -154,7 +163,8 @@ class UserService:
                     "message": "用户信息更新成功",
                     "user": {
                         "id": user.id,
-                        "username": user.username
+                        "username": user.username,
+                        "nickname": getattr(user, "nickname", None) or user.username,
                     }
                 }
             else:
@@ -169,6 +179,39 @@ class UserService:
                 "success": False,
                 "message": "更新用户信息失败"
             }
+
+    @staticmethod
+    async def update_nickname(user_id: int, nickname: str) -> Dict[str, Any]:
+        """修改昵称（不要求唯一）。"""
+        user = await UserDao.update_user(user_id, nickname=nickname)
+        if not user:
+            return {"success": False, "message": "用户不存在"}
+        return {
+            "success": True,
+            "message": "昵称更新成功",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "nickname": user.nickname,
+            },
+        }
+
+    @staticmethod
+    async def change_password(
+        user_id: int, old_password: str, new_password: str
+    ) -> Dict[str, Any]:
+        """修改密码；旧密码错误不修改，成功不吊销已签发 token。"""
+        user = await UserDao.get_user_by_id(user_id)
+        if user is None:
+            return {"success": False, "message": "用户不存在"}
+        if not verify_password(old_password, user.password):
+            return {
+                "success": False,
+                "error_code": "WRONG_OLD_PASSWORD",
+                "message": "旧密码错误",
+            }
+        await UserDao.update_user(user_id, password=hash_password(new_password))
+        return {"success": True, "message": "密码修改成功"}
 
     @staticmethod
     async def delete_user(user_id: int) -> Dict[str, Any]:
@@ -223,6 +266,7 @@ class UserService:
                 {
                     "id": user.id,
                     "username": user.username,
+                    "nickname": getattr(user, "nickname", None) or user.username,
                     "created_at": user.created_at,
                     "updated_at": user.updated_at
                 }
@@ -292,7 +336,8 @@ class UserService:
                     "message": "登录成功",
                     "user": {
                         "id": user.id,
-                        "username": user.username
+                        "username": user.username,
+                        "nickname": getattr(user, "nickname", None) or user.username,
                     }
                 }
             else:

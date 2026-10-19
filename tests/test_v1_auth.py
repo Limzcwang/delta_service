@@ -177,7 +177,7 @@ class LoginEndpointTests(AuthTestCase, unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             v1_auth.UserService,
             "login",
-            new=mock.AsyncMock(return_value={"success": True, "user": {"id": 1, "username": "alice"}}),
+            new=mock.AsyncMock(return_value={"success": True, "user": {"id": 1, "username": "alice", "nickname": "alice"}}),
         ) as service_login:
             response = await v1_auth.login(request, payload)
 
@@ -187,7 +187,7 @@ class LoginEndpointTests(AuthTestCase, unittest.IsolatedAsyncioTestCase):
         data = response["data"]
         self.assertEqual("Bearer", data["token_type"])
         self.assertEqual(7 * 24 * 3600, data["expires_in"])
-        self.assertEqual({"id": "1", "username": "alice"}, data["user"])
+        self.assertEqual({"id": "1", "username": "alice", "nickname": "alice"}, data["user"])
         self.assertEqual("1", tokens.decode_access_token(data["access_token"]))
 
     async def test_login_wrong_password_returns_401(self):
@@ -221,7 +221,7 @@ class LoginEndpointTests(AuthTestCase, unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             v1_auth.UserService,
             "login",
-            new=mock.AsyncMock(return_value={"success": True, "user": {"id": 1, "username": "alice"}}),
+            new=mock.AsyncMock(return_value={"success": True, "user": {"id": 1, "username": "alice", "nickname": "alice"}}),
         ), mock.patch.dict(os.environ, {}, clear=False), capture_logger(service_logger):
             os.environ.pop("JWT_SECRET", None)
             with self.assertRaises(v1_common.APIError) as ctx:
@@ -243,6 +243,7 @@ class MeEndpointTests(AuthTestCase, unittest.IsolatedAsyncioTestCase):
             {
                 "id": "3",
                 "username": "bob",
+                "nickname": "bob",
                 "created_at": int(created.timestamp() * 1000),
             },
             response["data"],

@@ -21,8 +21,10 @@ from service import rooms  # noqa: E402
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
-def make_user(user_id=1, username="alice"):
-    return SimpleNamespace(id=user_id, username=username)
+def make_user(user_id=1, username="alice", nickname=None):
+    return SimpleNamespace(
+        id=user_id, username=username, nickname=nickname if nickname is not None else username
+    )
 
 
 def make_room(room_id="room-1", code="A1B2C", **overrides):
@@ -434,24 +436,20 @@ class KickCloseUpdateTests(RoomServiceTestCase):
             self._await(
                 rooms.update_room(make_user(2), room.id, {"name": "新名"})
             )
-        self.assertEqual(rooms.ERR_NOT_ROOM_OWNER, ctx.exception.error_code)
+        self.assertEqual(rooms.ERR_ROOM_FORBIDDEN, ctx.exception.error_code)
 
-        with mock.patch.object(
-            rooms.backgrounds_service, "find_background", return_value={"id": "bg1"}
-        ):
-            updated = self._await(
-                rooms.update_room(
-                    make_user(1),
-                    room.id,
-                    {"name": " 新名 ", "background_id": "bg1"},
-                )
+        updated = self._await(
+            rooms.update_room(
+                make_user(1),
+                room.id,
+                {"name": " 新名 "},
             )
+        )
         self.assertEqual("新名", updated.name)
-        self.assertEqual("bg1", updated.background_id)
 
         with self.assertRaises(rooms.RoomError) as ctx:
             self._await(
-                rooms.update_room(make_user(1), room.id, {"name": "x" * 33})
+                rooms.update_room(make_user(1), room.id, {"name": "x" * 31})
             )
         self.assertEqual(rooms.ERR_ROOM_NAME_INVALID, ctx.exception.error_code)
 
@@ -475,7 +473,7 @@ class KickCloseUpdateTests(RoomServiceTestCase):
                 rooms.update_room(make_user(1), room.id, {"password": "new-pass"})
             )
         self.assertEqual(
-            rooms.ERR_ROOM_PASSWORD_NOT_ALLOWED, ctx.exception.error_code
+            rooms.ERR_INVALID_ROOM_PAYLOAD, ctx.exception.error_code
         )
 
     @staticmethod

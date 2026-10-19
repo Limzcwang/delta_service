@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import List, Optional
 
@@ -5,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from log.logger import log_api_request, log_exception, resolve_request_id
+from service.user import UserService
 from service.room import (
     create_room, join_room, leave_room,
     get_room_info, get_public_room_list,
@@ -47,6 +49,27 @@ class ErrorResponse(BaseModel):
     error_code: str
     message: str
     detail: Optional[str] = None
+
+
+
+
+async def _nickname_for(identifier: str) -> str:
+    """legacy 房间接口：把用户名/用户 ID 转成对外昵称（F1）。"""
+    try:
+        if isinstance(identifier, str) and identifier.isdigit():
+            result = await UserService.get_user_by_id(int(identifier))
+        else:
+            result = await UserService.get_user_by_username(str(identifier))
+        if result.get("success"):
+            return result["user"].get("nickname") or ""
+    except Exception:
+        pass
+    # 旧内存房间可能残留不存在的用户名；不再向他人泄露 username，回退占位
+    return "用户"
+
+
+async def _nicknames(identifiers) -> List[str]:
+    return list(await asyncio.gather(*(_nickname_for(item) for item in identifiers)))
 
 
 # 自定义异常处理器
@@ -274,9 +297,9 @@ async def get_room_info_api(request: Request, room_code: str):
         return RoomInfoResponse(
             room_code=room_code,
             domain=room_info["domain"],
-            creator=room_info["creator"],
-            members=list(room_info["members"]),
-            online=list(room_info["online"]),
+            creator=await _nickname_for(room_info["creator"]),
+            members=await _nicknames(room_info["members"]),
+            online=await _nicknames(room_info["online"]),
             created_at=room_info["created_at"]
         )
     except Exception as e:
@@ -315,9 +338,9 @@ async def get_public_room_list_api(request: Request):
             room_responses.append(RoomInfoResponse(
                 room_code=room_info["room_code"],
                 domain=room_info["domain"],
-                creator=room_info["creator"],
-                members=list(room_info["members"]),
-                online=list(room_info["online"]),
+                creator=await _nickname_for(room_info["creator"]),
+                members=await _nicknames(room_info["members"]),
+                online=await _nicknames(room_info["online"]),
                 created_at=room_info["created_at"]
             ))
 

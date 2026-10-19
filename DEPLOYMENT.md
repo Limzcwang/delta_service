@@ -128,7 +128,11 @@ sudo stat -c '%U:%G %a' /etc/delta-service/db.env   # 期望 root:runneruser 640
 5. 用生产 env-file 起临时容器做冒烟测试（18000 端口），访问 `/docs`；
 6. 删除旧容器，启动 `delta-service-container`（仅 8000，`unless-stopped`）；WebSocket 走同一端口的 `/ws`；
 7. 轮询 `/health`，失败则输出 `docker logs delta-service-container` 后 job 失败；
-8. 部署后建议人工执行一次 `bash /root/delta-deploy.sh --check`（如脚本支持）或仓库内的 `check_deployment.sh` 做巡检。
+8. 部署后执行数据库迁移（**升级必做**；脚本幂等，可重复跑；`generate_schemas` 不会给已有表补列）：
+   ```bash
+   docker run --rm --env-file /etc/delta-service/db.env delta-service python scripts/migrate_f.py
+   ```
+9. 部署后建议人工执行一次 `bash /root/delta-deploy.sh --check`（如脚本支持）或仓库内的 `check_deployment.sh` 做巡检。
 
 ## 4. 手动兜底（不依赖 runner）
 
@@ -151,10 +155,13 @@ docker run -d --name delta-service-container \
   -p 8000:8000 --restart unless-stopped \
   --env-file /etc/delta-service/db.env delta-service
 # 轮询 http://127.0.0.1:8000/health 直到 200
+# 升级必做：执行幂等迁移（空库/已迁移库均安全）
+docker run --rm --env-file /etc/delta-service/db.env delta-service python scripts/migrate_f.py
 ```
 
 注意事项：
 
+- **迁移脚本必须执行**：`generate_schemas` 不会给已有表补列（F 起新增 `users.nickname`、`rooms.deleted`）；脚本幂等，空库（应用已建表）或已迁移库重复执行均安全；
 - 手动部署后，下一次 push 触发的 CI 会再次覆盖容器；手动操作只作为临时兜底，事后再查 runner/CI 问题；
 - 手动构建时同样会覆盖 `delta-service:latest`，回滚信息见第 5 节；
 - 任何情况下都不要把 `DB_PASSWORD` 直接写在命令行（会进 shell history/进程列表），统一用 `--env-file`。

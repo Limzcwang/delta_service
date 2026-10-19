@@ -16,8 +16,10 @@ from service.rooms import ERR_NOT_ROOM_MEMBER, RoomError  # noqa: E402
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
-def make_user(user_id=1, username="alice"):
-    return SimpleNamespace(id=user_id, username=username)
+def make_user(user_id=1, username="alice", nickname=None):
+    return SimpleNamespace(
+        id=user_id, username=username, nickname=nickname if nickname is not None else username
+    )
 
 
 def make_room(room_id="room-1"):
@@ -62,8 +64,9 @@ class FakeMessageDao:
         self.cursor_lookup = (room_id, message_id)
         return self.cursor_result
 
-    async def list_for_room(self, room_id, before=None, limit=50):
+    async def list_for_room(self, room_id, before=None, limit=50, since=None):
         self.list_args = (room_id, before, limit)
+        self.since_arg = since
         return list(self.list_result)
 
     async def delete_older_than(self, cutoff):
@@ -133,7 +136,7 @@ class SendMessageTests(MessageServiceTestCase):
         self.assertEqual(32, len(created["id"]))
         self.assertEqual("hi", result["content"])
         self.assertEqual("c-1", result["client_msg_id"])
-        self.assertEqual({"id": "5", "username": "dsh_test"}, result["user"])
+        self.assertEqual({"id": "5", "nickname": "dsh_test"}, result["user"])
         self.assertEqual(room.id, result["room_id"])
         self.assertEqual(int(BASE_TIME.timestamp() * 1000), result["created_at"])
 
@@ -170,7 +173,7 @@ class ListMessagesTests(MessageServiceTestCase):
 
     def test_cursor_is_resolved_and_forwarded(self):
         room = make_room()
-        cursor = make_message("m9")
+        cursor = make_message("m9", created_at=datetime.now())
         self.dao.cursor_result = cursor
         self.dao.list_result = [make_message("m8")]
         page = self.await_(
@@ -179,6 +182,7 @@ class ListMessagesTests(MessageServiceTestCase):
 
         self.assertEqual((room.id, "m9"), self.dao.cursor_lookup)
         self.assertIs(cursor, self.dao.list_args[1])
+        self.assertIsNotNone(self.dao.since_arg)
         self.assertFalse(page["has_more"])
         self.assertIsNone(page["next_before"])
         self.assertEqual("m8", page["items"][0]["id"])

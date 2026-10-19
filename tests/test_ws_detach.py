@@ -63,7 +63,7 @@ class DetachSessionTests(_DetachTestCase):
         events = self.alice_ws.messages("user_left")
         self.assertEqual(1, len(events))
         self.assertEqual("kicked", events[0]["reason"])
-        self.assertEqual({"id": "2", "username": "bob"}, events[0]["user"])
+        self.assertEqual({"id": "2", "nickname": "bob"}, events[0]["user"])
         self.assertEqual([], self.bob_ws.messages("user_left"))
 
     async def test_detached_user_no_longer_receives_chat_broadcast(self):
@@ -114,7 +114,7 @@ class RoomCloseDetachTests(_DetachTestCase):
     async def test_http_close_detaches_all_and_blocks_chat_canvas(self):
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "close_room",
+            "delete_room",
             new=mock.AsyncMock(return_value=self.room),
         ), mock.patch.object(
             v1_rooms, "_get_websocket_manager", return_value=self.manager
@@ -122,7 +122,11 @@ class RoomCloseDetachTests(_DetachTestCase):
             response = await v1_rooms.close_room(
                 DummyRequest(), self.room.code, self.alice
             )
-        self.assertEqual({"closed": True}, response["data"])
+        self.assertEqual({"deleted": True}, response["data"])
+        self.assertTrue(
+            self.alice_ws.messages("room_deleted")
+            or self.bob_ws.messages("room_deleted")
+        )
         self.assertIsNone(self.alice_session.room_id)
         self.assertIsNone(self.bob_session.room_id)
 

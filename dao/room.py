@@ -26,6 +26,8 @@ class Room(models.Model):
     created_at = fields.DatetimeField(auto_now_add=True, index=True)
     updated_at = fields.DatetimeField(auto_now=True)
     closed_at = fields.DatetimeField(null=True, index=True)
+    # F2 软删除：不物理删数据；软删后不再出现在列表/详情/加入路径。
+    deleted = fields.BooleanField(default=False, index=True)
 
     class Meta:
         table = "rooms"
@@ -62,13 +64,19 @@ class RoomDao:
 
     @staticmethod
     async def code_exists(code: str) -> bool:
-        """活跃房间内 code 是否已被占用（已关闭房间可复用 code）。"""
-        return await Room.filter(code=code, closed_at__isnull=True).exists()
+        """code 是否已被占用：软删房间永不復用；未软删的已关闭房间仍可复用。"""
+        if await Room.filter(code=code, deleted=True).exists():
+            return True
+        return await Room.filter(
+            code=code, deleted=False, closed_at__isnull=True
+        ).exists()
 
     @staticmethod
     async def list_public(limit: int, before: Optional[datetime] = None) -> List[Room]:
         """按 created_at 倒序返回未关闭的公共房间（多取 1 条用于判断 has_more）。"""
-        query = Room.filter(visibility="public", closed_at__isnull=True)
+        query = Room.filter(
+            visibility="public", closed_at__isnull=True, deleted=False
+        )
         if before is not None:
             query = query.filter(created_at__lt=before)
         return await query.order_by("-created_at").limit(limit + 1)
@@ -83,6 +91,14 @@ class RoomDao:
     async def close(room: Room, closed_at: Optional[datetime] = None) -> None:
         now = closed_at or datetime.now()
         await Room.filter(id=room.id).update(closed_at=now, updated_at=now)
+
+    @staticmethod
+    async def soft_delete(room: Room, deleted_at: Optional[datetime] = None) -> None:
+        """F2 软删除：deleted=True + closed_at=now（保留全部数据）。"""
+        now = deleted_at or datetime.now()
+        await Room.filter(id=room.id).update(
+            deleted=True, closed_at=now, updated_at=now
+        )
 
 
 class RoomMemberDao:

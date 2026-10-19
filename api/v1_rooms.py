@@ -55,13 +55,14 @@ _ERROR_MAP = {
     rooms_service.ERR_ROOM_OWNER_MUST_CLOSE: (409, CODE_ROOM_CONFLICT),
     rooms_service.ERR_CANNOT_KICK_OWNER: (400, CODE_BAD_REQUEST),
     rooms_service.ERR_INVALID_VISIBILITY: (400, CODE_BAD_REQUEST),
-    rooms_service.ERR_ROOM_PASSWORD_NOT_ALLOWED: (400, CODE_BAD_REQUEST),
+    rooms_service.ERR_INVALID_ROOM_PAYLOAD: (400, CODE_BAD_REQUEST),
     "INVALID_PAGINATION": (400, CODE_BAD_REQUEST),
     "INVALID_CURSOR": (400, CODE_BAD_REQUEST),
     messages_service.ERR_INVALID_MESSAGE: (400, CODE_BAD_REQUEST),
     messages_service.ERR_RATE_LIMITED: (429, CODE_RATE_LIMITED),
     canvas_service.ERR_INVALID_CANVAS_OP: (400, CODE_BAD_REQUEST),
     canvas_service.ERR_CANVAS_OUT_OF_ORDER: (409, CODE_CONFLICT),
+    rooms_service.ERR_ROOM_FORBIDDEN: (403, CODE_FORBIDDEN),
 }
 
 
@@ -109,8 +110,8 @@ class JoinRoomRequest(BaseModel):
 
 
 class UpdateRoomRequest(BaseModel):
+    # F3：房主只能改 name / password；visibility 与 background 不可通过 PATCH 修改
     name: Optional[str] = None
-    background_id: Optional[str] = None
     password: Optional[str] = None
 
 
@@ -235,11 +236,14 @@ async def list_room_messages(
 ):
     """按时间倒序返回历史消息；before 为上一页最后一条消息 id。"""
     try:
-        room, _members = await rooms_service.get_room_for_member(
+        room, membership = await rooms_service.get_room_membership(
             room_id_or_code, user
         )
         page = await messages_service.list_messages(
-            room, before=before, limit=limit
+            room,
+            before=before,
+            limit=limit,
+            joined_at=getattr(membership, "joined_at", None),
         )
     except RoomError as exc:
         _raise_room_error(exc)
@@ -263,39 +267,53 @@ async def update_room(
     except RoomError as exc:
         _raise_room_error(exc)
 
+    # F3：向房间内广播 room_updated（只含安全字段，不含 hash）
+    try:
+        await _get_websocket_manager().notify_room_updated(room)
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "广播 room_updated 失败", {"room": room_id_or_code})
+
     return ok(
         {"room": rooms_service.room_to_dict(room, len(members))},
         request=request,
     )
 
 
-@router.delete("/rooms/{room_id_or_code}", summary="关闭房间（仅房主）")
+@router.delete("/rooms/{room_id_or_code}", summary="软删除房间（仅房主）")
 async def close_room(
     request: Request,
     room_id_or_code: str,
     user=Depends(get_current_user),
 ):
     try:
-        room = await rooms_service.close_room(user, room_id_or_code)
+        room = await rooms_service.delete_room(user, room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
 
-    # 关房时：画板状态落盘 + 摘除该房间所有成员的 WS 会话（含房主）
+    # F2：画板落盘 → 广播 room_deleted → 摘除全房 WS 会话（已删则上述基本为空操作）
     try:
         manager = _get_websocket_manager()
     except Exception as exc:  # pragma: no cover - 防御性
-        log_exception(exc, "关房获取 WS 管理器失败", {"room": room_id_or_code})
+        log_exception(exc, "软删房间获取 WS 管理器失败", {"room": room_id_or_code})
     else:
         try:
             await manager.flush_canvas_on_close(room.id)
         except Exception as exc:  # pragma: no cover - 防御性
-            log_exception(exc, "关房画板快照落盘失败", {"room": room_id_or_code})
+            log_exception(exc, "软删房间画板落盘失败", {"room": room_id_or_code})
         try:
-            await manager.detach_room_sessions(room.id, reason="closed")
+            await manager.detach_room_sessions(
+                room.id,
+                reason="deleted",
+                before_event={
+                    "type": "room_deleted",
+                    "room_id": str(room.id),
+                    "room_code": getattr(room, "code", None),
+                },
+            )
         except Exception as exc:  # pragma: no cover - 防御性
-            log_exception(exc, "关房摘除 WS 会话失败", {"room": room_id_or_code})
+            log_exception(exc, "软删房间摘除 WS 会话失败", {"room": room_id_or_code})
 
-    return ok({"closed": True}, request=request)
+    return ok({"deleted": True}, request=request)
 
 
 @router.post("/rooms/{room_id_or_code}/join", summary="加入房间")

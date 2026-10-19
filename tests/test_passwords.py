@@ -142,7 +142,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(ctx.__exit__, None, None, None)
 
     async def test_create_user_stores_hash_not_plaintext(self):
-        fake_user = SimpleNamespace(id=1, username="alice")
+        fake_user = SimpleNamespace(id=1, username="alice", nickname="alice")
         with mock.patch.object(
             user_service.UserDao,
             "create_user",
@@ -157,7 +157,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(RAW_PASSWORD, stored)
 
     async def test_create_user_without_password_stores_none(self):
-        fake_user = SimpleNamespace(id=1, username="alice")
+        fake_user = SimpleNamespace(id=1, username="alice", nickname="alice")
         with mock.patch.object(
             user_service.UserDao,
             "create_user",
@@ -167,7 +167,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(create_user.await_args.args[1])
 
     async def test_update_user_hashes_password(self):
-        fake_user = SimpleNamespace(id=7, username="alice")
+        fake_user = SimpleNamespace(id=7, username="alice", nickname="alice")
         with mock.patch.object(
             user_service.UserDao,
             "update_user",
@@ -181,7 +181,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(verify_password(RAW_PASSWORD, stored))
 
     async def test_update_user_without_password_does_not_hash_other_fields(self):
-        fake_user = SimpleNamespace(id=7, username="alice")
+        fake_user = SimpleNamespace(id=7, username="alice", nickname="alice")
         with mock.patch.object(
             user_service.UserDao,
             "update_user",
@@ -194,7 +194,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_login_with_hashed_password_succeeds_without_rehash(self):
         stored = hash_password(RAW_PASSWORD)
-        user = SimpleNamespace(id=1, username="alice", password=stored)
+        user = SimpleNamespace(id=1, username="alice", nickname="alice", password=stored)
         with mock.patch.object(
             user_service.UserDao,
             "get_user_by_username",
@@ -205,11 +205,11 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
             result = await user_service.UserService.login("alice", RAW_PASSWORD)
 
         self.assertTrue(result["success"])
-        self.assertEqual({"id": 1, "username": "alice"}, result["user"])
+        self.assertEqual({"id": 1, "username": "alice", "nickname": "alice"}, result["user"])
         update_user.assert_not_awaited()
 
     async def test_login_with_legacy_plaintext_rehashes_immediately(self):
-        user = SimpleNamespace(id=1, username="alice", password=RAW_PASSWORD)
+        user = SimpleNamespace(id=1, username="alice", nickname="alice", password=RAW_PASSWORD)
         with mock.patch.object(
             user_service.UserDao,
             "get_user_by_username",
@@ -228,7 +228,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(RAW_PASSWORD, kwargs["password"])
 
     async def test_login_wrong_password_fails(self):
-        user = SimpleNamespace(id=1, username="alice", password=hash_password(RAW_PASSWORD))
+        user = SimpleNamespace(id=1, username="alice", nickname="alice", password=hash_password(RAW_PASSWORD))
         with mock.patch.object(
             user_service.UserDao,
             "get_user_by_username",
@@ -253,7 +253,7 @@ class UserServicePasswordTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("用户名或密码错误", result["message"])
 
     async def test_login_rehash_failure_does_not_break_login(self):
-        user = SimpleNamespace(id=1, username="alice", password=RAW_PASSWORD)
+        user = SimpleNamespace(id=1, username="alice", nickname="alice", password=RAW_PASSWORD)
         with mock.patch.object(
             user_service.UserDao,
             "get_user_by_username",
@@ -278,50 +278,50 @@ class UserSerializationTests(unittest.IsolatedAsyncioTestCase):
     def test_public_user_filters_password_from_dict_and_object(self):
         payload = {
             "id": 1,
-            "username": "alice",
+            "nickname": "alice",
             "password": hash_password(RAW_PASSWORD),
             "created_at": "2026-01-01",
             "updated_at": "2026-01-02",
             "internal_note": "x",
         }
         self.assertEqual(
-            {"id": 1, "username": "alice", "created_at": "2026-01-01", "updated_at": "2026-01-02"},
+            {"id": 1, "nickname": "alice", "created_at": "2026-01-01", "updated_at": "2026-01-02"},
             user_api._public_user(payload),
         )
         self.assertIsNone(user_api._public_user(None))
 
-        user_obj = SimpleNamespace(id=2, username="bob", password="secret")
-        self.assertEqual({"id": 2, "username": "bob"}, user_api._public_user(user_obj))
+        user_obj = SimpleNamespace(id=2, username="bob", nickname="bob", password="secret")
+        self.assertEqual({"id": 2, "nickname": "bob"}, user_api._public_user(user_obj))
 
     async def test_create_user_response_has_no_password(self):
         fake_result = {
             "success": True,
             "message": "用户创建成功",
-            "user": {"id": 1, "username": "alice", "password": "should-not-leak"},
+            "user": {"id": 1, "nickname": "alice", "password": "should-not-leak"},
         }
         with mock.patch.object(
             user_api.UserService, "create_user", new=mock.AsyncMock(return_value=fake_result)
         ):
             response = await user_api.create_user(
-                SimpleNamespace(username="alice", password=RAW_PASSWORD)
+                SimpleNamespace(username="alice01", nickname="alice", password=RAW_PASSWORD)
             )
 
         text = json.dumps(response, ensure_ascii=False)
         self.assertNotIn("password", text)
         self.assertNotIn("should-not-leak", text)
-        self.assertEqual({"id": 1, "username": "alice"}, response["data"])
+        self.assertEqual({"id": 1, "nickname": "alice"}, response["data"])
 
     async def test_login_response_has_no_password(self):
         fake_result = {
             "success": True,
             "message": "登录成功",
-            "user": {"id": 1, "username": "alice", "password": "should-not-leak"},
+            "user": {"id": 1, "nickname": "alice", "password": "should-not-leak"},
         }
         with mock.patch.object(
             user_api.UserService, "login", new=mock.AsyncMock(return_value=fake_result)
         ):
             response = await user_api.login(
-                SimpleNamespace(username="alice", password=RAW_PASSWORD)
+                SimpleNamespace(username="alice01", nickname="alice", password=RAW_PASSWORD)
             )
         self.assertNotIn("password", json.dumps(response, ensure_ascii=False))
 
@@ -330,8 +330,8 @@ class UserSerializationTests(unittest.IsolatedAsyncioTestCase):
             "success": True,
             "message": "获取用户列表成功",
             "users": [
-                {"id": 1, "username": "alice", "password": "h1"},
-                {"id": 2, "username": "bob", "password": "h2"},
+                {"id": 1, "nickname": "alice", "password": "h1"},
+                {"id": 2, "nickname": "bob", "password": "h2"},
             ],
             "total": 2,
         }

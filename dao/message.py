@@ -46,9 +46,12 @@ class MessageDao:
         room_id: str,
         before: Optional[RoomMessage] = None,
         limit: int = 50,
+        since: Optional[datetime] = None,
     ) -> List[RoomMessage]:
-        """按 created_at/id 倒序返回；多取 1 条用于判断 has_more。"""
+        """按 created_at/id 倒序返回；since 为历史窗口下界，多取 1 条判断 has_more。"""
         query = RoomMessage.filter(room_id=room_id)
+        if since is not None:
+            query = query.filter(created_at__gte=since)
         if before is not None:
             query = query.filter(created_at__lt=before.created_at)
         return (

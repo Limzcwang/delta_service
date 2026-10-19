@@ -22,7 +22,7 @@ ROOM_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 ROOM_CODE_RETRIES = 10
 MAX_MEMBERS = 8
 NAME_MIN_LENGTH = 1
-NAME_MAX_LENGTH = 32
+NAME_MAX_LENGTH = 30
 PASSWORD_MIN_LENGTH = 4
 PASSWORD_MAX_LENGTH = 64
 DEFAULT_PAGE_SIZE = 20
@@ -49,7 +49,8 @@ ERR_ROOM_NAME_INVALID = "ROOM_NAME_INVALID"
 ERR_ROOM_OWNER_MUST_CLOSE = "ROOM_OWNER_MUST_CLOSE"
 ERR_CANNOT_KICK_OWNER = "CANNOT_KICK_OWNER"
 ERR_INVALID_VISIBILITY = "INVALID_VISIBILITY"
-ERR_ROOM_PASSWORD_NOT_ALLOWED = "ROOM_PASSWORD_NOT_ALLOWED"
+ERR_INVALID_ROOM_PAYLOAD = "INVALID_ROOM_PAYLOAD"
+ERR_ROOM_FORBIDDEN = "ROOM_FORBIDDEN"
 
 
 class RoomError(Exception):
@@ -116,6 +117,11 @@ def _ensure_open(room: Room) -> None:
         raise RoomError(ERR_ROOM_CLOSED, "房间已关闭", 409)
 
 
+def _ensure_owner_for_mutation(owner, room: Room) -> None:
+    if str(getattr(owner, "id", "")) != str(getattr(room, "owner_id", "")):
+        raise RoomError(ERR_ROOM_FORBIDDEN, "仅房主可执行该操作", 403)
+
+
 def _ensure_owner(owner, room: Room) -> None:
     if str(getattr(owner, "id", "")) != str(getattr(room, "owner_id", "")):
         raise RoomError(ERR_NOT_ROOM_OWNER, "仅房主可执行该操作", 403)
@@ -139,8 +145,14 @@ def _ms_to_datetime(value: Any) -> Optional[datetime]:
     return datetime.fromtimestamp(ms / 1000)
 
 
-async def resolve_room(room_id_or_code: str) -> Room:
-    """按 5 位 room_code 或内部 id 解析房间；不存在抛 ROOM_NOT_FOUND。"""
+async def resolve_room(
+    room_id_or_code: str, include_deleted: bool = False
+) -> Room:
+    """按 5 位 room_code 或内部 id 解析房间。
+
+    F2 软删除：默认把 deleted 房间视为不存在（ROOM_NOT_FOUND，不泄露删除状态）；
+    仅房主 DELETE 幂等路径允许 include_deleted=True。
+    """
     if not isinstance(room_id_or_code, str) or not room_id_or_code.strip():
         raise RoomError(ERR_ROOM_NOT_FOUND, "房间不存在", 404)
     identifier = room_id_or_code.strip()
@@ -151,18 +163,18 @@ async def resolve_room(room_id_or_code: str) -> Room:
         room = await RoomDao.get_by_code(normalized)
     if room is None:
         room = await RoomDao.get_by_id(identifier)
-    if room is None:
+    if room is None or (getattr(room, "deleted", False) and not include_deleted):
         raise RoomError(ERR_ROOM_NOT_FOUND, "房间不存在", 404)
     return room
 
 
 def member_to_dict(member: RoomMember) -> Dict[str, Any]:
+    """对外成员信息只暴露 nickname（F1：username 仅本人可见）。"""
     user = getattr(member, "user", None)
     user_id = getattr(user, "id", None)
-    username = getattr(user, "username", None)
     return {
         "id": str(user_id),
-        "username": username,
+        "nickname": getattr(user, "nickname", None) or "",
         "role": getattr(member, "role", "member"),
     }
 
@@ -263,6 +275,7 @@ async def list_public_rooms(
         for room in rooms
         if room.visibility == VISIBILITY_PUBLIC
         and getattr(room, "closed_at", None) is None
+        and not getattr(room, "deleted", False)
     ]
 
     has_more = len(rooms) > limit
@@ -290,6 +303,18 @@ async def get_room_for_member(
     if membership is None:
         raise RoomError(ERR_NOT_ROOM_MEMBER, "你不在该房间中", 403)
     return room, await list_members(room)
+
+
+async def get_room_membership(
+    room_id_or_code: str, user
+) -> Tuple[Room, RoomMember]:
+    """历史窗口等场景：返回房间 + 当前用户的成员关系（含 joined_at）。"""
+    room = await resolve_room(room_id_or_code)
+    _ensure_open(room)
+    membership = await RoomMemberDao.get(room.id, getattr(user, "id", None))
+    if membership is None:
+        raise RoomError(ERR_NOT_ROOM_MEMBER, "你不在该房间中", 403)
+    return room, membership
 
 
 async def ensure_member(room: Room, user) -> None:
@@ -375,17 +400,25 @@ async def close_room(owner, room_id_or_code: str) -> Room:
     return room
 
 
+async def delete_room(owner, room_id_or_code: str) -> Room:
+    """F2 软删除：仅房主；已删除再删幂等成功，不物理删数据。"""
+    room = await resolve_room(room_id_or_code, include_deleted=True)
+    _ensure_owner_for_mutation(owner, room)
+    if getattr(room, "deleted", False):
+        return room
+    await RoomDao.soft_delete(room)
+    return await RoomDao.get_by_id(room.id) or room
+
+
 async def update_room(owner, room_id_or_code: str, changes: Dict[str, Any]) -> Room:
-    """更新房间（仅房主）；changes 只处理提供的字段。"""
+    """F3 房主修改房间：仅 name / password；visibility 不可切换。"""
     room = await resolve_room(room_id_or_code)
-    _ensure_owner(owner, room)
+    _ensure_owner_for_mutation(owner, room)
     _ensure_open(room)
 
     fields: Dict[str, Any] = {}
     if "name" in changes:
         fields["name"] = _validate_room_name(changes["name"])
-    if "background_id" in changes:
-        fields["background_id"] = _validate_background(changes["background_id"])
     if "password" in changes:
         new_password = changes["password"]
         if new_password is None:
@@ -393,7 +426,9 @@ async def update_room(owner, room_id_or_code: str, changes: Dict[str, Any]) -> R
         else:
             if room.visibility != VISIBILITY_PRIVATE:
                 raise RoomError(
-                    ERR_ROOM_PASSWORD_NOT_ALLOWED, "公共房间不能设置密码", 400
+                    ERR_INVALID_ROOM_PAYLOAD,
+                    "公开房不支持设置密码；如需加密请新建私有房",
+                    400,
                 )
             fields["password_hash"] = hash_password(
                 _validate_room_password(new_password)
