@@ -59,7 +59,7 @@
 
 ## 3. WebSocket 模块
 
-WS server 在 `websocket/websocket_manager.py:219-239` 启动，绑定 `localhost:8765`，`ping_interval=20s`、`ping_timeout=10s`。
+WebSocket 入口是 FastAPI `/ws`（与 HTTP 共用 8000，`ws://<host>:8000/ws`）；旧独立 8765 server 由 `LEGACY_WS_ENABLED=true` 才启动，默认关闭。协议引擎的 `ping_interval=20s`、`ping_timeout=10s` 仍由旧 manager 使用，FastAPI 端点复用其会话/认证逻辑。
 
 | # | 功能 | 状态 | 代码依据 | 说明 |
 |---|---|---|---|---|
@@ -124,8 +124,8 @@ WS server 在 `websocket/websocket_manager.py:219-239` 启动，绑定 `localhos
 | 1 | GitHub Actions self-hosted 部署 | 已实现 | `.github/workflows/deploy.yml` | push master / 手工触发；checkout 固定 SHA；preflight→build→smoke→deploy→health |
 | 2 | 数据库凭据 env-file 注入 | 已实现 | `deploy.yml:17-21,34-42,75-98`；`DEPLOYMENT.md §2.5` | `--env-file /etc/delta-service/db.env`（0640），不进仓库/日志/命令行 |
 | 3 | 手动兜底部署 | 已实现（部署机） | `DEPLOYMENT.md §4` | `/root/delta-deploy.sh` 不依赖 runner；脚本不在仓库 |
-| 4 | 部署验证脚本 | 部分实现 | `check_deployment.sh:1-135` | 假设容器名/端口；WS 用 `nc` 只测端口；未覆盖新流程与 `/health` |
-| 5 | Docker 镜像 | 已实现 | `Dockerfile:1-42`；`.dockerignore` | `python:3.11-slim`；`HEALTHCHECK` 用 `/health`；`EXPOSE 8000 8765` |
+| 4 | 部署验证脚本 | 部分实现 | `check_deployment.sh:1-135` | 假设容器名/端口；WS 与 HTTP 共用 8000，脚本不再单独探端口；未覆盖新流程与 `/health` |
+| 5 | Docker 镜像 | 已实现 | `Dockerfile:1-42`；`.dockerignore` | `python:3.11-slim`；`HEALTHCHECK` 用 `/health`；`EXPOSE 8000`（WS 与 HTTP 共用） |
 | 6 | 健康检查 | 部分实现 | `api/init.py:48-51`；`Dockerfile:37-39` | `/health` 恒 200，不检查数据库/WS 依赖 |
 | 7 | 自动化回滚 | 未实现 | `deploy.yml` | 镜像始终覆盖 `delta-service:latest`，无版本标签/发布记录；回滚靠本地旧镜像 ID |
 | 8 | 多实例/水平扩展 | 未实现 | `service/room.py:61-63`；`service/user.py:11-13`；`main.py` | 状态在进程内存，多副本数据不一致；未使用 gunicorn/多 worker |
@@ -183,10 +183,8 @@ WS server 在 `websocket/websocket_manager.py:219-239` 启动，绑定 `localhos
 
 ### 8.2 P1
 
-**D-04 WS server 绑定 `localhost`，容器端口映射对外无效**
-依据：`websocket/websocket_manager.py:222-225`（`websockets.serve(..., "localhost", 8765)`）。
-影响：`-p 8765:8765` 只能从容器内部访问；生产/本地 Docker 的 WS 实际上不可用。
-建议：绑定 `0.0.0.0`（并通过防火墙/反代限制），或明确只支持同机访问并在文档标注。
+**D-04（已修复）WebSocket 单端口 `/ws`**
+B2b 起 WS 通过 FastAPI `@router.websocket("/ws")` 与 HTTP 共用 8000，容器只需 `-p 8000:8000`；旧独立 8765 server 默认关闭（`LEGACY_WS_ENABLED=true` 才启动，不建议对公网开放）。
 
 **D-05 重复后台任务：data_pusher / inactive_user_checker 各跑两份**
 `main.py:112-117` 直接 gather 两个后台协程；`run_websocket_server()` 又 `create_task` 一次。

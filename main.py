@@ -115,16 +115,21 @@ async def main():
         # 初始化服务
         await init_services()
 
-        # 后台任务唯一启动点；WebSocket 主入口是 FastAPI 的 /ws（8000 单端口）。
-        # 旧独立 8765 server 仅在 LEGACY_WS_ENABLED=true 时启动（默认关闭）。
-        tasks = [
-            run_api_server(),
-            websocket_manager.data_pusher(),
-            websocket_manager.inactive_user_checker(),
-        ]
+        # WebSocket 主入口是 FastAPI 的 /ws（与 HTTP 共用 8000）。
+        # 旧独立 8765 server 及其 data_pusher/inactive_user_checker 仅在
+        # LEGACY_WS_ENABLED=true 时启动（默认关闭），新 /ws 不需要它们。
+        tasks = [run_api_server()]
         if _legacy_ws_enabled():
-            logger.warning("LEGACY_WS_ENABLED=true，启动旧 8765 WebSocket server")
-            tasks.append(websocket_manager.run_websocket_server())
+            logger.warning(
+                "LEGACY_WS_ENABLED=true，启动旧 8765 WebSocket server 及后台任务"
+            )
+            tasks.extend(
+                [
+                    websocket_manager.run_websocket_server(),
+                    websocket_manager.data_pusher(),
+                    websocket_manager.inactive_user_checker(),
+                ]
+            )
         await asyncio.gather(*tasks)
     except Exception as e:
         log_exception(e, "Delta Service 启动失败")

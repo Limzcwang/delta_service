@@ -260,8 +260,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 - URL：`ws://<host>:8000/ws`（B2b 现状，与 HTTP 同端口）；生产目标 `wss://<host>/ws`（反代同一 8000 上游）。旧独立 `ws://<host>:8765` 仅在 `LEGACY_WS_ENABLED=true` 时存在，默认关闭。
 - 所有消息为 JSON 文本，单条 ≤ 64KB（超限 `INVALID_PAYLOAD` 并断开）。
-- 心跳：目标为服务端每 **15s** 下发 `heartbeat`，客户端 45s 未收到心跳可重连；客户端也可主动 `ping`。
-  （B2b 现状：服务端心跳保持 30s；15s 模拟数据推送仍由旧 manager 的 data_pusher 任务运行，但只对旧 8765 连接生效，`/ws` 客户端不会收到 `push`。目标 15s 心跳待后续统一。）
+- 心跳：服务端每 **30s** 下发 `heartbeat`，客户端 90s 未收到心跳可重连；客户端也可主动 `ping`。
+  （B2b 现状即按此实现（30s）；旧 manager 的 data_pusher/离线检测只在 `LEGACY_WS_ENABLED=true` 时启动，`/ws` 客户端不会收到 `push` 演示数据。）
 - 客户端应实现指数退避重连（1s/2s/4s…上限 30s），重连后重新 `auth` 并重新 `join_room`。
 
 ### 6.2 首消息认证（B）
@@ -426,7 +426,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | join_room | 要求已认证 + 已是房间成员（HTTP join 过）；非成员 `NOT_ROOM_MEMBER`；房间不存在 `ROOM_NOT_FOUND`；已关闭 `ROOM_CLOSED`；成功回 `room_joined{room,members}`（members 含 `online`） |
 | 离开/断线 | `leave_room` 回 `left_room` 并向房间其他成员广播 `user_left(reason=left)`；断开自动清理并广播 `user_left(reason=disconnected)` |
 | 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
-| 心跳 | 保持原有 30s 服务端 `heartbeat` 与 `ping→pong`（§6.1 目标的 15s 待统一） |
+| 心跳 | 服务端每 30s 下发 `heartbeat`，客户端 90s 未收到可重连；保留 `ping→pong` |
 | 错误格式 | `{"type":"error","code":"...","error_code":"...","message":"..."}`：`code` 为新协议字段，`error_code` 为旧字段兼容（同值） |
 | 房间事件 | `user_joined` / `user_left` 载荷：`room_id`、`room_code`、`user{id,username}`、`ts`（ms）、可选 `reason` |
 | 画板/技能 | 当前 `room_joined` **不包含** `canvas_snapshot` / `skill_state`（D/E 阶段加入） |
