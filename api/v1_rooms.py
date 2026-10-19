@@ -77,6 +77,14 @@ def _raise_room_error(exc: RoomError) -> None:
     )
 
 
+async def _remove_skill_state_safely(room_id: Any, user_id: Any) -> None:
+    """E1：HTTP leave/kick 后无条件删除技能状态（不依赖 WS session 是否存在）。"""
+    try:
+        await skills_service.remove_state(room_id, int(user_id))
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "删除技能共享状态失败", {"room": room_id})
+
+
 def _raise_canvas_error(exc: CanvasError) -> None:
     status, code = _ERROR_MAP.get(exc.error_code, (400, CODE_BAD_REQUEST))
     raise APIError(status, code, exc.message, error_code=exc.error_code)
@@ -410,6 +418,9 @@ async def leave_room(
     except RoomError as exc:
         _raise_room_error(exc)
 
+    # E1：无条件删除该用户技能状态（即使其 WS 已断开/从未连接）
+    await _remove_skill_state_safely(room.id, user.id)
+
     # 安全：HTTP 退房成功后立即摘除该用户的 WS 房间会话，避免继续收 chat_message
     try:
         await _get_websocket_manager().detach_user_from_room(
@@ -435,6 +446,9 @@ async def kick_member(
         room = await rooms_service.resolve_room(room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # E1：无条件删除被踢者技能状态（即使其 WS 已断开/从未连接）
+    await _remove_skill_state_safely(room.id, payload.user_id)
 
     # H3：先给被踢者定向 room_kicked，再摘除其 WS 会话
     try:

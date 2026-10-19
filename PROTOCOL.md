@@ -552,7 +552,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 
 **HTTP**：`GET /api/v1/rooms/{room_id_or_code}/skills`（JWT+房间成员）返回 `{"items":[SkillShareState]}`。
 
-**时间/清理**：`updated_at` 超过 **30 分钟**未更新的状态视为「未共享」，GET 与 `room_joined` **直接过滤掉**（不返回 stale 字段）；关房/软删清理整房状态，被踢/退房/leave 删除该用户状态；客户端重连后重新上报。
+**时间/清理**：`updated_at` 超过 **30 分钟**未更新的状态视为「未共享」，GET 与 `room_joined` **直接过滤掉**（不返回 stale 字段）；关房/软删清理整房状态；HTTP/WS 的 leave、kick 即使目标当前无 WS 连接也**无条件在 DB 删除**该用户状态（`skill_share_off` 由 WS 会话触发，但删除走 DB 直删）；客户端重连后重新上报。
 
 ## 7. 错误码与状态码
 
