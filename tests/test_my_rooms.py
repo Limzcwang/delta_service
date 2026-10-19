@@ -67,7 +67,13 @@ class FakeMemberDao:
 
     async def list_for_user(self, user_id, limit, before_joined_at=None, offset=0):
         self.list_args = (user_id, limit, before_joined_at, offset)
-        return list(self.memberships[: limit + 1])
+        items = [
+            member
+            for member in self.memberships
+            if before_joined_at is None
+            or getattr(member, "joined_at", None) < before_joined_at
+        ]
+        return list(items[offset : offset + limit + 1])
 
     async def count(self, room_id):
         return self.count_value
@@ -117,6 +123,42 @@ class MyRoomsServiceTests(unittest.IsolatedAsyncioTestCase):
             next_before,
         )
         self.assertEqual((1, 2, None, 0), dao.list_args)
+
+    async def test_invalid_rooms_do_not_break_pagination(self):
+        # A(新,有效), deletedB, closedC, D(旧,有效), E(更旧,有效)
+        t0 = BASE_TIME
+        memberships = [
+            make_member(make_room("A"), joined_at=t0),
+            make_member(
+                make_room("B", deleted=True),
+                joined_at=t0 - timedelta(minutes=1),
+            ),
+            make_member(
+                make_room("C", closed_at=t0),
+                joined_at=t0 - timedelta(minutes=2),
+            ),
+            make_member(make_room("D"), joined_at=t0 - timedelta(minutes=3)),
+            make_member(make_room("E"), joined_at=t0 - timedelta(minutes=4)),
+        ]
+        dao = FakeMemberDao(memberships)
+        all_items = []
+        before = None
+        with mock.patch.object(rooms_service, "RoomMemberDao", dao):
+            for _page_index in range(10):
+                items, has_more, next_before = await rooms_service.list_my_rooms(
+                    make_user(), limit=1, before=before
+                )
+                all_items.extend(items)
+                if not has_more:
+                    break
+                before = next_before
+
+        self.assertEqual(["A", "D", "E"], [item["id"] for item in all_items])
+        self.assertEqual(3, len(all_items))  # 无重复
+        self.assertFalse(has_more)
+        self.assertIsNone(next_before)
+        self.assertNotIn("B", [item["id"] for item in all_items])
+        self.assertNotIn("C", [item["id"] for item in all_items])
 
     async def test_before_cursor_and_offset_forwarded(self):
         dao = FakeMemberDao([])

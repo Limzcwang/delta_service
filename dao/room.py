@@ -128,7 +128,11 @@ class RoomMemberDao:
         offset: int = 0,
     ) -> List[RoomMember]:
         """H1 我的房间：按 joined_at 倒序返回成员的房间关系（多取 1 条）。"""
-        query = RoomMember.filter(user_id=user_id).select_related("room")
+        query = RoomMember.filter(
+            user_id=user_id,
+            room__closed_at__isnull=True,
+            room__deleted=False,
+        ).select_related("room")
         if before_joined_at is not None:
             query = query.filter(joined_at__lt=before_joined_at)
         query = query.order_by("-joined_at", "-id")
