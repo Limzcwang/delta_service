@@ -82,6 +82,7 @@ jobs:
             -p 8000:8000 \
             --restart unless-stopped \
             --env-file "$DB_ENV_FILE" \
+            -e FORWARDED_ALLOW_IPS=172.17.0.1 \
             delta-service
           echo "⏳ 等待服务启动..."
           for _ in $(seq 1 30); do

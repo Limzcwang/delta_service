@@ -17,7 +17,7 @@
 | 代码检出 | `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`（v4.2.2，固定 SHA） |
 | 构建 | `docker build -t delta-service .`（基础镜像先尝试从腾讯云镜像预拉） |
 | 冒烟 | 用同一 `db.env` 起临时容器 `delta-service-smoke`（宿主 18000→容器 8000），轮询 `/docs` 最多 30×2s |
-| 部署 | `docker rm -f delta-service-container` 后 `docker run -d --name delta-service-container -p 8000:8000 --restart unless-stopped --env-file /etc/delta-service/db.env delta-service` |
+| 部署 | `docker rm -f delta-service-container` 后 `docker run -d --name delta-service-container -p 8000:8000 --restart unless-stopped --env-file /etc/delta-service/db.env -e FORWARDED_ALLOW_IPS=172.17.0.1 delta-service` |
 | 健康检查 | 轮询 `http://127.0.0.1:8000/health` 最多 30×2s，非 200 则打印容器日志并失败 |
 
 流水线步骤与 `deploy.yml` 的对应关系：
@@ -119,6 +119,61 @@ sudo stat -c '%U:%G %a' /etc/delta-service/db.env   # 期望 root:runneruser 640
 - 口令轮换后只需更新该文件并重启容器/重新部署，不需要改仓库或 GitHub Secrets；
 - **不要把该文件提交到仓库**；`.gitignore` 已忽略 `.env*`，`.dockerignore` 也会排除它。
 
+### 2.6 HTTPS（Caddy）与真实来源 IP
+
+生产通过宿主机 **Caddy** 终结 TLS 并反代到容器 `127.0.0.1:8000`：
+
+- 对外地址：**https://deltachat.icu:8443**
+- 证书/私钥（腾讯云**静态证书**，非 acme 自动续期）：
+  - `/etc/delta-tls/deltachat.icu_bundle.crt`（权限 `644`）
+  - `/etc/delta-tls/deltachat.icu.key`（权限 `600`）
+- Caddy：`/usr/local/bin/caddy`（v2.10.2），配置 `/etc/caddy/Caddyfile`，
+  systemd 服务名 **`delta-tls.service`**（`systemctl enable --now delta-tls`）。
+- 监听 **8443 TLS** → `reverse_proxy 127.0.0.1:8000`，Caddyfile 片段：
+
+```caddyfile
+https://deltachat.icu:8443 {
+    tls /etc/delta-tls/deltachat.icu_bundle.crt /etc/delta-tls/deltachat.icu.key
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+- 安全组需放行：**22**（SSH）、**8000**（容器/本机反代源）、**8443**（HTTPS）。
+- Caddy 在宿主机、经 docker 网桥访问容器，容器看到的来源 IP 是 `172.17.0.1`；
+  必须信任该反代并读取 `X-Forwarded-For`，否则登录限流会把所有用户当成同一 IP。
+- CI 与手动部署的 `docker run` 都必须带：
+  `-e FORWARDED_ALLOW_IPS=172.17.0.1`
+- `main.py` 的 uvicorn 显式设置 `proxy_headers=True` +
+  `forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1")`，
+  不依赖隐式默认。
+
+**证书续期（静态证书，1 年有效）**：到期前在腾讯云重新下载证书，替换
+`/etc/delta-tls/` 下的 `deltachat.icu_bundle.crt` 与 `deltachat.icu.key`，
+然后 `systemctl restart delta-tls`。若后续接入 DNSPod API Token，可改为
+acme.sh 自动续期。
+
+**部署后验证**：
+
+```bash
+# 1) HTTPS 健康检查（-I 只看响应头）
+curl -sI https://deltachat.icu:8443/health
+
+# 2) 触发登录后看容器日志：client_ip 应为真实公网 IP，而不是 172.17.0.1
+docker logs --since 5m delta-service-container 2>&1 | grep -i login | tail -20
+
+# 3) 同一来源 IP 连续第 6 次登录应返回 429（登录限流 5 次/分/IP）
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+    https://deltachat.icu:8443/api/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"nonexistent","password":"wrong"}'
+done
+# 前 5 次 401，第 6 次 429 即正确
+```
+
+> 若 Caddy 与容器不在同一 docker 网络/网段，按实际网关 IP 调整
+> `FORWARDED_ALLOW_IPS`（可用 `docker network inspect bridge` 查看 Gateway）。
+
 ## 3. 部署流程（从 push 到上线）
 
 1. 开发者合并 PR 到 `master`；
@@ -126,7 +181,7 @@ sudo stat -c '%U:%G %a' /etc/delta-service/db.env   # 期望 root:runneruser 640
 3. Preflight 校验 Docker 与 env-file；
 4. 构建镜像 `delta-service:latest`（每次覆盖），期间从腾讯云镜像预拉 Python 基础镜像；
 5. 用生产 env-file 起临时容器做冒烟测试（18000 端口），访问 `/docs`；
-6. 删除旧容器，启动 `delta-service-container`（仅 8000，`unless-stopped`）；WebSocket 走同一端口的 `/ws`；
+6. 删除旧容器，启动 `delta-service-container`（仅 8000，`unless-stopped`；带 `-e FORWARDED_ALLOW_IPS=172.17.0.1`）；WebSocket 走同一端口的 `/ws`；
 7. 轮询 `/health`，失败则输出 `docker logs delta-service-container` 后 job 失败；
 8. 部署后执行数据库迁移（**升级必做**；脚本幂等，可重复跑；`generate_schemas` 不会给已有表补列）：
    ```bash
@@ -153,7 +208,8 @@ docker run -d --name delta-service-smoke -p 18000:8000 --env-file /etc/delta-ser
 docker rm -f delta-service-container 2>/dev/null || true
 docker run -d --name delta-service-container \
   -p 8000:8000 --restart unless-stopped \
-  --env-file /etc/delta-service/db.env delta-service
+  --env-file /etc/delta-service/db.env \
+  -e FORWARDED_ALLOW_IPS=172.17.0.1 delta-service
 # 轮询 http://127.0.0.1:8000/health 直到 200
 # 升级必做：执行幂等迁移（空库/已迁移库均安全）
 docker run --rm --env-file /etc/delta-service/db.env delta-service python scripts/migrate_f.py
@@ -236,6 +292,23 @@ sudo bash /root/delta-deploy.sh
 - 预防：每季度检查一次 runner 版本与 GitHub release notes。
 
 ## 7. 部署后巡检
+
+**HTTPS / 真实 IP 验证（每次部署后）**：
+
+```bash
+curl -fsS https://deltachat.icu:8443/health
+# 预期 {"status":"healthy","service":"delta_service"}
+```
+
+然后触发一次登录并查看容器日志，来源 IP 应为真实公网 IP（不是 `172.17.0.1`）：
+
+```bash
+docker logs --since 5m delta-service-container 2>&1 | grep -E 'client_ip|登录|POST /api/v1/auth/login' | tail -20
+```
+
+若日志里出现 `172.17.0.1`，检查 `FORWARDED_ALLOW_IPS` 是否传入容器、Caddy 是否设置 `X-Forwarded-For`。
+
+
 
 仓库内的 `check_deployment.sh` 是**手动诊断脚本**（不是 CI 步骤），检查：容器存在/状态/启动时间、8000 监听、`/docs` 200、容器日志中的 error、`docker stats`。用法：
 
