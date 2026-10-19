@@ -51,6 +51,23 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
+def _uvicorn_config_kwargs() -> dict:
+    """显式启用反代头信任：生产由 Caddy 反代到容器，需从 X-Forwarded-For 取真实 IP。
+
+    `FORWARDED_ALLOW_IPS` 默认 127.0.0.1；容器部署时通过 deploy.yml/手动命令
+    传入 172.17.0.1（Caddy 在宿主机、经 docker 网桥连容器）。
+    """
+    return {
+        "host": "0.0.0.0",
+        "port": 8000,
+        "log_level": "info",
+        "proxy_headers": True,
+        "forwarded_allow_ips": os.environ.get(
+            "FORWARDED_ALLOW_IPS", "127.0.0.1"
+        ),
+    }
+
+
 async def run_api_server():
     """运行HTTP API服务器"""
     try:
@@ -60,9 +77,7 @@ async def run_api_server():
 
         config = uvicorn.Config(
             app=app,
-            host="0.0.0.0",
-            port=8000,
-            log_level="info"
+            **_uvicorn_config_kwargs(),
         )
         server = uvicorn.Server(config)
         logger.info("HTTP API服务启动: http://localhost:8000")

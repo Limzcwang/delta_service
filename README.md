@@ -43,7 +43,7 @@
 | ORM | Tortoise ORM + aiomysql（MySQL） |
 | 进程模型 | **单进程** asyncio：`main.py` 用 `asyncio.gather` 跑 HTTP+WS（同端口 8000）；旧 8765 server/推送/离线检测仅在 `LEGACY_WS_ENABLED=true` 时启动 |
 | 持久化 | 仅 `users` 表（MySQL）；房间/消息历史/在线状态均在内存字典 |
-| 部署 | Docker 镜像 + GitHub Actions self-hosted runner（见 [DEPLOYMENT.md](DEPLOYMENT.md)） |
+| 部署 | Docker 镜像 + GitHub Actions self-hosted runner；生产 HTTPS 由 Caddy 反代 `https://deltachat.icu:8443`（见 [DEPLOYMENT.md](DEPLOYMENT.md)） |
 
 > WebSocket 与 HTTP 共用 8000 端口（`/ws`），反代/防火墙只需处理 8000 一个业务端口。旧独立 8765 server 默认关闭（`LEGACY_WS_ENABLED=true` 才启动），不应再对公网开放。
 
@@ -132,7 +132,8 @@ python main.py
 
 | 服务 | 地址 | 说明 |
 |---|---|---|
-| HTTP API | <http://localhost:8000> | Swagger UI：<http://localhost:8000/docs> |
+| 生产 HTTPS | <https://deltachat.icu:8443> | Caddy 终结 TLS，反代容器 8000；Swagger：<https://deltachat.icu:8443/docs> |
+| HTTP API | <http://localhost:8000> | 本地直连；生产走 HTTPS |
 | 健康检查 | <http://localhost:8000/health> | 恒返回 `{"status":"healthy","service":"delta_service"}`（不检查 DB） |
 | WebSocket | `ws://localhost:8000/ws` | 与 HTTP 同端口；旧 8765 默认关闭 |
 
@@ -143,7 +144,7 @@ python main.py
 ```bash
 # 先参考 .env.example 创建 db.env（DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME）
 docker build -t delta-service .
-docker run --rm -p 8000:8000 --env-file ./db.env delta-service
+docker run --rm -p 8000:8000 --env-file ./db.env -e FORWARDED_ALLOW_IPS=172.17.0.1 delta-service
 ```
 
 > WS 仍受 `localhost` 绑定限制；容器内 `docker logs` 可看到启动日志。生产流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
@@ -445,6 +446,8 @@ python -m unittest discover -s tests -v
 - `test_websocket_refactor.py` 是**手动集成脚本**（需要真实 MySQL 与 `DB_*` 环境变量），不在 unittest 套件内，CI 也不会自动跑。
 
 ## 10. 部署与安全
+
+生产 HTTPS：**https://deltachat.icu:8443**（Caddy 在宿主机终结 TLS，反代容器 `127.0.0.1:8000`）。容器必须设置 `FORWARDED_ALLOW_IPS=172.17.0.1` 并信任 `X-Forwarded-For`，否则登录限流会把所有用户当成同一来源；CI 的 deploy.yml 与手动 `docker run` 均已带该 env。部署后验证：`curl -fsS https://deltachat.icu:8443/health`，并确认登录日志来源 IP 为真实公网 IP（非 `172.17.0.1`）。
 
 - 部署流程、self-hosted runner 升级、手动兜底、回滚与排障：[DEPLOYMENT.md](DEPLOYMENT.md)。
 - 口令哈希、日志脱敏、Secret Scanning/gitleaks、历史清理状态、漏洞上报：[SECURITY.md](SECURITY.md)。
