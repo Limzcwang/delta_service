@@ -183,14 +183,17 @@ class _StubStatus:
 
 
 def install_fastapi_stub():
-    """安装 fastapi 最小替身（APIRouter/HTTPException/Request/status）。"""
+    """安装 fastapi 最小替身（APIRouter/HTTPException/Request/Depends/status）。"""
     _replace_module(
         "fastapi",
         APIRouter=_StubRouter,
         HTTPException=StubHTTPException,
         Request=object,
+        Depends=lambda dependency: dependency,
         status=_StubStatus,
     )
+    # v1 统一响应包会用到 fastapi.responses.JSONResponse
+    _replace_module("fastapi.responses", JSONResponse=FakeJSONResponse)
 
 
 def install_pydantic_stub():
