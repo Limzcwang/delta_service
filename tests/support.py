@@ -149,6 +149,9 @@ class _StubRouter:
     def put(self, *args, **kwargs):
         return self._register("PUT", args, kwargs)
 
+    def patch(self, *args, **kwargs):
+        return self._register("PATCH", args, kwargs)
+
     def delete(self, *args, **kwargs):
         return self._register("DELETE", args, kwargs)
 
@@ -202,14 +205,27 @@ def install_pydantic_stub():
 
     class BaseModel:
         def __init__(self, **data):
+            self.__fields_set__ = set(data.keys())
             for key, value in data.items():
                 setattr(self, key, value)
 
-        def dict(self):
-            return dict(self.__dict__)
+        @property
+        def model_fields_set(self):
+            return set(self.__fields_set__)
 
-        def model_dump(self):
-            return self.dict()
+        def dict(self, exclude_unset=False, **_kwargs):
+            data = dict(self.__dict__)
+            data.pop("__fields_set__", None)
+            if exclude_unset:
+                data = {
+                    key: value
+                    for key, value in data.items()
+                    if key in self.__fields_set__
+                }
+            return data
+
+        def model_dump(self, exclude_unset=False, **_kwargs):
+            return self.dict(exclude_unset=exclude_unset)
 
     _replace_module("pydantic", BaseModel=BaseModel)
 

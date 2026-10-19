@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Request
@@ -11,6 +12,7 @@ from api.deps import get_current_user
 from api.v1_common import (
     APIError,
     CODE_BAD_REQUEST,
+    CODE_CONFLICT,
     CODE_INTERNAL,
     CODE_RATE_LIMITED,
     CODE_UNAUTHORIZED,
@@ -39,6 +41,37 @@ class LoginRequest(BaseModel):
 
     username: str
     password: str
+
+
+class RegisterRequest(BaseModel):
+    """v1 注册请求。"""
+
+    username: str
+    password: str
+
+
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,50}$")
+_PASSWORD_MIN_LENGTH = 6
+
+
+def _token_response(user: Any, request: Any = None) -> Dict[str, Any]:
+    """签发 JWT 并构造登录/注册统一响应。"""
+    summary = _user_summary(user)
+    try:
+        access_token, expires_in = create_access_token(summary["id"])
+    except TokenConfigError as exc:
+        # 配置错误不把细节回传客户端，只记服务端日志
+        log_exception(exc, "JWT 配置错误")
+        raise APIError(500, CODE_INTERNAL, "服务端认证配置错误") from exc
+    return ok(
+        {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": expires_in,
+            "user": summary,
+        },
+        request=request,
+    )
 
 
 def _user_summary(user: Any) -> Dict[str, Any]:
@@ -77,23 +110,32 @@ async def login(request: Request, payload: LoginRequest):
     if not result.get("success"):
         raise APIError(401, CODE_UNAUTHORIZED, "用户名或密码错误")
 
-    user = result.get("user") or {}
-    try:
-        access_token, expires_in = create_access_token(user.get("id"))
-    except TokenConfigError as exc:
-        # 配置错误不把细节回传客户端，只记服务端日志
-        log_exception(exc, "JWT 配置错误")
-        raise APIError(500, CODE_INTERNAL, "服务端认证配置错误") from exc
+    return _token_response(result.get("user") or {}, request=request)
 
-    return ok(
-        {
-            "access_token": access_token,
-            "token_type": "Bearer",
-            "expires_in": expires_in,
-            "user": _user_summary(user),
-        },
-        request=request,
-    )
+
+@router.post("/auth/register", summary="注册并签发 JWT")
+async def register(request: Request, payload: RegisterRequest):
+    """创建用户并直接返回与登录一致的 token 响应。"""
+    username = (payload.username or "").strip()
+    password = payload.password or ""
+    if not _USERNAME_RE.fullmatch(username):
+        raise APIError(
+            400,
+            CODE_BAD_REQUEST,
+            "用户名需为 3-50 位字母、数字或下划线",
+        )
+    if len(password) < _PASSWORD_MIN_LENGTH:
+        raise APIError(
+            400,
+            CODE_BAD_REQUEST,
+            f"密码长度不能少于 {_PASSWORD_MIN_LENGTH} 个字符",
+        )
+
+    result = await UserService.create_user(username, password)
+    if not result.get("success"):
+        raise APIError(409, CODE_CONFLICT, "用户名已存在或注册失败")
+
+    return _token_response(result.get("user") or {}, request=request)
 
 
 @router.get("/users/me", summary="获取当前登录用户")
