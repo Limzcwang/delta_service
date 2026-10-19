@@ -306,6 +306,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `join_room` | 加入房间 | 是 | 见下 |
 | `leave_room` | 离开房间 | 是 | `{"type":"leave_room"}`（B2b 忽略房间参数，退出当前频道） |
 | `chat_send` | 发聊天消息（C） | 是 | 见下 |
+| `canvas_op` | 画板增量（D） | 是 | 见下 |
+| `canvas_snapshot_save` | 保存画板全量快照（D） | 是 | 见下 |
 | `canvas_op` | 画板操作（D） | 是 | 见下 |
 | `skill_report` | 上报技能快照（E） | 是 | 见下 |
 | `ping` | 心跳 | 否 | `{"type":"ping","ts":1750000000000}` |
@@ -333,6 +335,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `room_joined` | 加入成功，携带房间、成员、画板快照、技能状态 |
 | `user_joined` / `user_left` | 房间成员变化 |
 | `chat_message` | 聊天消息（C） |
+| `canvas_op` | 画板增量广播（D，不含发送者） |
+| `canvas_snapshot_saved` | 画板快照保存确认（D） |
 | `canvas_snapshot` / `canvas_op` | 画板快照 / 增量操作（D） |
 | `skill_state` | 某用户最新技能快照（E） |
 | `heartbeat` | 心跳 |
@@ -444,6 +448,43 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 房间事件 | `user_joined` / `user_left` 载荷：`room_id`、`room_code`、`user{id,username}`、`ts`（ms）、可选 `reason` |
 | 画板/技能 | 当前 `room_joined` **不包含** `canvas_snapshot` / `skill_state`（D/E 阶段加入） |
 
+### 6.7 共享画板（D 当前实现）
+
+**实时增量（WS，不落库）**
+
+客户端 → 服务端：
+
+```json
+{"type":"canvas_op","room_id":"01J8Z9K3Q7","rev":12,
+ "op":{"kind":"stroke","points":[{"x":0.12,"y":0.5},{"x":0.13,"y":0.51}],
+       "color":"#FF3B30","width":4,"tool":"pen"}}
+{"type":"canvas_op","room_id":"01J8Z9K3Q7","rev":13,"op":{"kind":"clear"}}
+```
+
+- 前置：已认证、已进房且仍是房间成员（非成员/未进房 `NOT_ROOM_MEMBER`，关房 `ROOM_CLOSED`）；`room_id` 必须与当前频道一致。
+- 校验：`kind` 为 `stroke|clear`；stroke 的 `points` 非空且 ≤512 点，`x/y` 为 0–1 归一化数值，`color` 为 `#RRGGBB`，`width` 1–32，`tool` 为 `pen|eraser`；否则 `INVALID_CANVAS_OP`。
+- `rev`：每连接每房间独立单调递增；`rev <= 上次` 丢弃并回 `CANVAS_OUT_OF_ORDER`（不更新水位、不广播）。
+- 限频：30 条/秒/用户，超限 `RATE_LIMITED`，不广播。
+- 通过校验后**不改内容**，广播给房间内其他连接（**不回发送者**）：
+  `{"type":"canvas_op","room_id":"...","user_id":"1","rev":12,"op":{...}}`。
+- 关房/被踢/HTTP 退房后不再广播（会话被摘除或成员校验失败）。
+
+**快照（落库）**
+
+```json
+{"type":"canvas_snapshot_save","room_id":"01J8Z9K3Q7","rev":13,
+ "strokes":[{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}]}
+```
+
+- 所有房间成员可保存；`strokes` ≤5000 条、序列化 ≤512KB、每条按 canvas_op 规则校验（超限 `INVALID_CANVAS_OP`）。
+- 成功回 `{"type":"canvas_snapshot_saved","room_id":"...","rev":13,"updated_at":1750000000000}`。
+- 落库时机（当前）：仅显式 `canvas_snapshot_save` + 房主关闭房间时服务端 flush 内存累计笔画；**不做 60s/30s 定时快照**（已知限制，重启会丢未保存增量）。
+- `room_canvas` 表每房间一条 `{strokes, rev, updated_at}`；保留 **7 天**，由 `MessageCleanupTask` 与聊天 30 天清理一起周期执行（`MESSAGE_CLEANUP_INTERVAL_HOURS` 默认 24h，启动先跑一次）。
+
+**HTTP**
+
+`GET /api/v1/rooms/{room_id_or_code}/canvas`（JWT + 成员）：无快照返回 `{"strokes":[],"rev":0,"updated_at":null}`；有快照返回 `{"strokes":[...],"rev":N,"updated_at":毫秒}`。错误沿用 `ROOM_NOT_FOUND`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`，业务码在 `data.error_code`。
+
 ## 7. 错误码与状态码
 
 ### 7.1 HTTP 错误码（目标）
@@ -493,6 +534,8 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `INVALID_PAYLOAD` | JSON 对象结构/字段非法 |
 | `INVALID_JSON` | 消息不是合法 JSON |
 | `UNSUPPORTED_MESSAGE_TYPE` | 当前版本未实现的消息类型 |
+| `CANVAS_OUT_OF_ORDER` | 画板 op 的 rev 非递增（乱序/回退，丢弃） |
+| `INVALID_CANVAS_OP` | 画板 op/快照字段、坐标、点数、大小非法 |
 | `CANVAS_SEQ_GAP` | 画板操作序号不连续（需重同步，D 阶段） |
 | `INTERNAL_ERROR` | 服务端内部错误 |
 
@@ -511,6 +554,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ROOM_FULL` / `ROOM_OWNER_MUST_CLOSE` | 409 | 40900 |
 | `ROOM_CLOSED` | 409 | 40901 |
 | `RATE_LIMITED` | 429 | 42900 |
+| `INVALID_CANVAS_OP` | 400 | 40000 |
 | `ROOM_CODE_GENERATION_FAILED` | 500 | 50000 |
 
 成功响应的 `data` 为业务数据；错误响应 `data={"error_code":"..."}`，客户端按该字符串分支（如弹房间密码框）。

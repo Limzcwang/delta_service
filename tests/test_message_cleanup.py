@@ -42,13 +42,31 @@ class CleanupTaskTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_once_returns_deleted_count(self):
         cleanup = mock.AsyncMock(return_value=7)
-        task = MessageCleanupTask(interval_hours=1, cleanup=cleanup)
+        task = MessageCleanupTask(
+            interval_hours=1,
+            cleanup=cleanup,
+            canvas_cleanup=mock.AsyncMock(return_value=0),
+        )
         self.assertEqual(7, await task.run_once())
         cleanup.assert_awaited_once()
 
+    async def test_run_once_combines_message_and_canvas_cleanup(self):
+        cleanup = mock.AsyncMock(return_value=7)
+        canvas_cleanup = mock.AsyncMock(return_value=3)
+        task = MessageCleanupTask(
+            interval_hours=1, cleanup=cleanup, canvas_cleanup=canvas_cleanup
+        )
+        self.assertEqual(10, await task.run_once())
+        cleanup.assert_awaited_once()
+        canvas_cleanup.assert_awaited_once()
+
     async def test_run_once_swallows_exception(self):
         cleanup = mock.AsyncMock(side_effect=RuntimeError("db down"))
-        task = MessageCleanupTask(interval_hours=1, cleanup=cleanup)
+        task = MessageCleanupTask(
+            interval_hours=1,
+            cleanup=cleanup,
+            canvas_cleanup=mock.AsyncMock(return_value=0),
+        )
         self.assertEqual(0, await task.run_once())
 
     async def test_loop_runs_immediately_then_sleeps_interval(self):
@@ -60,7 +78,10 @@ class CleanupTaskTests(unittest.IsolatedAsyncioTestCase):
             raise asyncio.CancelledError()
 
         task = MessageCleanupTask(
-            interval_hours=2, cleanup=cleanup, sleep=fake_sleep
+            interval_hours=2,
+            cleanup=cleanup,
+            canvas_cleanup=mock.AsyncMock(return_value=0),
+            sleep=fake_sleep,
         )
         background = task.start()
         with self.assertRaises(asyncio.CancelledError):
@@ -79,7 +100,10 @@ class CleanupTaskTests(unittest.IsolatedAsyncioTestCase):
                 raise asyncio.CancelledError()
 
         task = MessageCleanupTask(
-            interval_hours=1, cleanup=cleanup, sleep=fake_sleep
+            interval_hours=1,
+            cleanup=cleanup,
+            canvas_cleanup=mock.AsyncMock(return_value=0),
+            sleep=fake_sleep,
         )
         background = task.start()
         with self.assertRaises(asyncio.CancelledError):
@@ -97,7 +121,10 @@ class CleanupTaskTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         task = MessageCleanupTask(
-            interval_hours=1, cleanup=cleanup, sleep=fake_sleep
+            interval_hours=1,
+            cleanup=cleanup,
+            canvas_cleanup=mock.AsyncMock(return_value=0),
+            sleep=fake_sleep,
         )
         background = task.start()
         await asyncio.wait_for(started_sleeping.wait(), timeout=1)

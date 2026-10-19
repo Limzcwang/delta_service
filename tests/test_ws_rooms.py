@@ -164,7 +164,7 @@ class LeaveAndDisconnectTests(WsRoomTestCase):
 
 class UnsupportedMessageTests(WsRoomTestCase):
     async def test_unsupported_message_type_after_auth(self):
-        for message_type in ("room_message", "canvas_op", "skill_report"):
+        for message_type in ("room_message", "skill_report"):
             with self.subTest(message_type=message_type):
                 self.alice_ws.sent.clear()
                 await self.manager.process_message(

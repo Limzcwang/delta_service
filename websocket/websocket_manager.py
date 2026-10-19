@@ -27,8 +27,10 @@ from security.tokens import (
     TokenInvalidError,
     decode_access_token,
 )
+from service import canvas as canvas_service
 from service import messages as messages_service
 from service import rooms as rooms_service
+from service.canvas import CanvasError
 from service.messages import MessageError, MessageRateLimiter
 from service.rooms import RoomError
 from service.user import UserService
@@ -73,6 +75,8 @@ class ClientSession:
     user_id: Optional[str] = None
     room_id: Optional[str] = None
     room_code: Optional[str] = None
+    # 每连接每房间的画板 rev 水位（新连接/重新进房重置）
+    canvas_rev: Optional[int] = None
 
     @property
     def authenticated(self) -> bool:
@@ -82,7 +86,11 @@ class ClientSession:
 class WebSocketManager:
     """WebSocket 连接/认证/房间频道管理器（表现层）。"""
 
-    def __init__(self, chat_rate_limiter: Optional[MessageRateLimiter] = None):
+    def __init__(
+        self,
+        chat_rate_limiter: Optional[MessageRateLimiter] = None,
+        canvas_rate_limiter: Optional[MessageRateLimiter] = None,
+    ):
         self.connected_clients: Set[WebSocketServerProtocol] = set()
         # user_id(str) -> ClientSession（单用户单连接）
         self.sessions: Dict[str, ClientSession] = {}
@@ -90,6 +98,12 @@ class WebSocketManager:
         self.user_websocket_map: Dict[str, WebSocketServerProtocol] = {}
         # 聊天限频（默认 5 条/秒/用户，可注入时钟/替换）
         self.chat_rate_limiter = chat_rate_limiter or MessageRateLimiter()
+        # 画板限频（独立实例，默认 30 条/秒/用户）
+        self.canvas_rate_limiter = canvas_rate_limiter or MessageRateLimiter(
+            max_messages=30, window_seconds=1.0
+        )
+        # 关房时落盘的最近画板状态（room_id -> {strokes, rev}）；不落库实时 op
+        self.canvas_states: Dict[str, Dict[str, Any]] = {}
         # 防止重复调用 run_websocket_server 时叠加 server/后台任务
         self._server_running = False
 
@@ -255,6 +269,10 @@ class WebSocketManager:
             await self._handle_leave_room(session, reply=True)
         elif message_type == "chat_send":
             await self._handle_chat_send(session, data)
+        elif message_type == "canvas_op":
+            await self._handle_canvas_op(session, data)
+        elif message_type == "canvas_snapshot_save":
+            await self._handle_canvas_snapshot_save(session, data)
         elif message_type == "ping":
             await self._send(session, {"type": "pong"})
         else:
@@ -343,6 +361,7 @@ class WebSocketManager:
 
         session.room_id = room.id
         session.room_code = room.code
+        session.canvas_rev = None
 
         await self._send_room_joined(session, room, members)
         await self.broadcast_to_room(
@@ -375,6 +394,7 @@ class WebSocketManager:
 
         session.room_id = None
         session.room_code = None
+        session.canvas_rev = None
         await self.broadcast_to_room(
             room_id,
             self._user_event(
@@ -460,6 +480,7 @@ class WebSocketManager:
         user = session.user
         session.room_id = None
         session.room_code = None
+        session.canvas_rev = None
         if user is not None:
             await self.broadcast_to_room(
                 str(room_id),
@@ -467,6 +488,132 @@ class WebSocketManager:
                 exclude_user_id=session.user_id,
             )
         return True
+
+    # ------------------------------------------------------------------ 画板
+    def _accumulate_canvas_state(self, room_id: str, op: Dict[str, Any], rev: int) -> None:
+        state = self.canvas_states.setdefault(
+            str(room_id), {"strokes": [], "rev": 0}
+        )
+        state["rev"] = max(int(state.get("rev", 0)), rev)
+        if op.get("kind") == "clear":
+            state["strokes"] = []
+            return
+        state["strokes"].append(op)
+        if len(state["strokes"]) > canvas_service.MAX_STROKES:
+            state["strokes"] = state["strokes"][-canvas_service.MAX_STROKES:]
+
+    async def _handle_canvas_op(self, session: ClientSession, data: Dict[str, Any]) -> None:
+        """校验成员/rev/op/限频后原样广播给房间内其他连接（不回发送者）。"""
+        if session.room_id is None:
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你还没有加入房间")
+            return
+
+        room_ref = data.get("room_id")
+        if not isinstance(room_ref, str) or not room_ref.strip():
+            await self._send_error(session, "INVALID_PAYLOAD", "缺少 room_id")
+            return
+        if str(room_ref.strip()) != str(session.room_id):
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你不在该房间中")
+            return
+
+        try:
+            room = await rooms_service.resolve_room(session.room_id)
+            await rooms_service.ensure_member(room, session.user)
+            canvas_service.validate_canvas_op(data.get("op"))
+        except RoomError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except CanvasError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+
+        rev = data.get("rev")
+        if isinstance(rev, bool) or not isinstance(rev, int):
+            await self._send_error(session, "INVALID_CANVAS_OP", "rev 必须是整数")
+            return
+        if session.canvas_rev is not None and rev <= session.canvas_rev:
+            await self._send_error(
+                session, "CANVAS_OUT_OF_ORDER", "画板操作序号已过期"
+            )
+            return
+        if not self.canvas_rate_limiter.check(session.user_id or ""):
+            await self._send_error(
+                session, "RATE_LIMITED", "画板操作过于频繁，请稍后再试"
+            )
+            return
+
+        session.canvas_rev = rev
+        op = data.get("op")
+        self._accumulate_canvas_state(room.id, op, rev)
+        await self.broadcast_to_room(
+            room.id,
+            {
+                "type": "canvas_op",
+                "room_id": str(room.id),
+                "user_id": str(session.user_id),
+                "rev": rev,
+                "op": op,
+            },
+            exclude_user_id=session.user_id,
+        )
+
+    async def _handle_canvas_snapshot_save(
+        self, session: ClientSession, data: Dict[str, Any]
+    ) -> None:
+        """会员可保存全量快照（≤5000 笔 / ≤512KB），落库并回 ack。"""
+        if session.room_id is None:
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你还没有加入房间")
+            return
+        room_ref = data.get("room_id")
+        if room_ref is not None and str(room_ref).strip() != str(session.room_id):
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你不在该房间中")
+            return
+
+        try:
+            room = await rooms_service.resolve_room(session.room_id)
+            await rooms_service.ensure_member(room, session.user)
+            rev = data.get("rev", session.canvas_rev or 0)
+            snapshot = await canvas_service.save_snapshot(
+                room.id, data.get("strokes"), rev
+            )
+        except RoomError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except CanvasError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "WS 保存画板快照失败", {"room": session.room_id})
+            await self._send_error(session, "INTERNAL_ERROR", "保存画板快照失败")
+            return
+
+        self.canvas_states[str(room.id)] = {
+            "strokes": list(data.get("strokes") or []),
+            "rev": int(snapshot.get("rev", 0)),
+        }
+        await self._send(
+            session,
+            {
+                "type": "canvas_snapshot_saved",
+                "room_id": str(room.id),
+                "rev": snapshot.get("rev", 0),
+                "updated_at": snapshot.get("updated_at"),
+            },
+        )
+
+    async def flush_canvas_on_close(self, room_id: Any) -> int:
+        """房间关闭时把内存中的画板状态落盘（无数据则跳过）。"""
+        state = self.canvas_states.pop(str(room_id), None)
+        if not state or not state.get("strokes"):
+            return 0
+        try:
+            await canvas_service.save_snapshot(
+                str(room_id), state["strokes"], int(state.get("rev", 0))
+            )
+        except Exception as exc:
+            log_exception(exc, "关房画板快照落盘失败", {"room": room_id})
+            return 0
+        return len(state["strokes"])
 
     # ------------------------------------------------------------------ 广播/清理
     async def broadcast(self, message: str) -> None:
@@ -508,6 +655,7 @@ class WebSocketManager:
             )
         session.room_id = None
         session.room_code = None
+        session.canvas_rev = None
 
         if session.user_id is not None and self.sessions.get(session.user_id) is session:
             del self.sessions[session.user_id]

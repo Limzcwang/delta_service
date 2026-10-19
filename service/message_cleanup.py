@@ -12,6 +12,7 @@ import time
 from typing import Awaitable, Callable, Optional
 
 from log.logger import log_exception, logger
+from service import canvas as canvas_service
 from service import messages as messages_service
 
 DEFAULT_INTERVAL_HOURS = 24.0
@@ -43,32 +44,37 @@ class MessageCleanupTask:
         self,
         interval_hours: Optional[float] = None,
         cleanup: Optional[Callable[[], Awaitable[int]]] = None,
+        canvas_cleanup: Optional[Callable[[], Awaitable[int]]] = None,
         sleep: Optional[Callable[[float], Awaitable[None]]] = None,
         clock: Optional[Callable[[], float]] = None,
     ):
         self.interval_hours = resolve_interval_hours(interval_hours)
         self.interval_seconds = self.interval_hours * 3600
-        self._cleanup = cleanup or messages_service.cleanup_old_messages
+        # 消息 30 天 + 画板快照 7 天，一并周期清理
+        self._cleanups = [
+            ("messages", cleanup or messages_service.cleanup_old_messages),
+            ("canvas", canvas_cleanup or canvas_service.cleanup_canvas_snapshots),
+        ]
         self._sleep = sleep or asyncio.sleep
         self._clock = clock or time.monotonic
         self._task: Optional[asyncio.Task] = None
 
     async def run_once(self) -> int:
-        """执行一次清理；异常只记日志（不打断周期任务）。"""
+        """执行一次清理；任一清理异常只记日志（不打断周期任务）。"""
         started = self._clock()
-        try:
-            deleted = await self._cleanup()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log_exception(exc, "聊天消息保留期清理失败")
-            return 0
-        logger.debug(
-            "聊天消息清理完成: 删除 %s 条，耗时 %.3fs",
-            deleted,
-            self._clock() - started,
-        )
-        return deleted
+        total = 0
+        for name, cleanup in self._cleanups:
+            try:
+                deleted = await cleanup()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log_exception(exc, f"{name} 保留期清理失败")
+                continue
+            total += int(deleted or 0)
+            logger.debug("%s 清理完成: 删除 %s 条", name, deleted)
+        logger.debug("保留期清理完成: 共删除 %s 条，耗时 %.3fs", total, self._clock() - started)
+        return total
 
     async def _loop(self) -> None:
         while True:
