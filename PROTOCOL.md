@@ -370,15 +370,16 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ```json
 {
   "type": "chat_message",
+  "id": "9f2c...",
   "room_id": "01J8Z9K3Q7",
-  "message_id": "msg_01J8Z...",
-  "client_msg_id": "m-001",
-  "sender": {"id": "1", "username": "alice"},
+  "user": {"id": "1", "username": "alice"},
   "content": "大家好",
-  "content_type": "text",
-  "ts": 1750000001500
+  "client_msg_id": "m-001",
+  "created_at": 1750000001500
 }
 ```
+
+> C1/B2b 客户端契约：字段固定为 `id` / `room_id` / `user` / `content` / `client_msg_id` / `created_at`；发送者本人也会收到广播，靠 `client_msg_id` 去重。`content_type` 暂不落库。
 
 `canvas_snapshot` / `canvas_op`（D）：
 
@@ -422,7 +423,9 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 旧 `authenticate` | **已移除**：返回 `auth_error`（`AUTH_INVALID`）并关闭 |
 | 未认证消息 | `error`，`code=NOT_AUTHENTICATED`，连接保持（可继续尝试 auth） |
 | 单用户单连接 | 新连接认证成功时关闭旧连接（close code 4000），旧连接退出房间并广播 `user_left(reason=replaced)` |
-| 已支持消息 | `auth`、`join_room`、`leave_room`、`ping`；`chat_send`/`canvas_op`/`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（C/D/E 实现） |
+| 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`ping`；`canvas_op`/`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（D/E 实现） |
+| chat_send | 需已进房；限频 5 条/秒/用户（超限 `RATE_LIMITED`）；空/超长（>2000）`INVALID_MESSAGE`；非成员 `NOT_ROOM_MEMBER`；成功后广播 `chat_message` 给房间内所有连接（含发送者），`client_msg_id` 原样回传 |
+| 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id，`limit` 默认 50/上限 100；需 JWT + 房间成员 |
 | join_room | 要求已认证 + 已是房间成员（HTTP join 过）；非成员 `NOT_ROOM_MEMBER`；房间不存在 `ROOM_NOT_FOUND`；已关闭 `ROOM_CLOSED`；成功回 `room_joined{room,members}`（members 含 `online`） |
 | 离开/断线 | `leave_room` 回 `left_room` 并向房间其他成员广播 `user_left(reason=left)`；断开自动清理并广播 `user_left(reason=disconnected)` |
 | 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
@@ -472,7 +475,10 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ROOM_PASSWORD_INVALID` | 房间密码错误 |
 | `ROOM_FULL` | 房间人数已满（若设上限） |
 | `ALREADY_IN_ROOM` | 已在房间（若不做幂等） |
-| `RATE_LIMITED` | 触发限频 |
+| `RATE_LIMITED` | 触发限频（聊天：5 条/秒/用户） |
+| `INVALID_MESSAGE` | 聊天内容为空/超过 2000 字符或 client_msg_id 非法 |
+| `NOT_ROOM_MEMBER` | 非房间成员（聊天/历史接口） |
+| `ROOM_CLOSED` | 房间已关闭 |
 | `INVALID_PAYLOAD` | JSON/字段/大小非法 |
 | `CANVAS_SEQ_GAP` | 画板操作序号不连续（需重同步） |
 | `INTERNAL_ERROR` | 服务端内部错误 |

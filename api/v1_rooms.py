@@ -18,11 +18,14 @@ from api.v1_common import (
     CODE_FORBIDDEN,
     CODE_INTERNAL,
     CODE_NOT_FOUND,
+    CODE_RATE_LIMITED,
     APIError,
     ok,
 )
 from service import backgrounds as backgrounds_service
+from service import messages as messages_service
 from service import rooms as rooms_service
+from service.messages import MessageError
 from service.rooms import RoomError
 
 router = APIRouter(prefix="/api/v1", tags=["v1-rooms"])
@@ -52,10 +55,22 @@ _ERROR_MAP = {
     rooms_service.ERR_ROOM_PASSWORD_NOT_ALLOWED: (400, CODE_BAD_REQUEST),
     "INVALID_PAGINATION": (400, CODE_BAD_REQUEST),
     "INVALID_CURSOR": (400, CODE_BAD_REQUEST),
+    messages_service.ERR_INVALID_MESSAGE: (400, CODE_BAD_REQUEST),
+    messages_service.ERR_RATE_LIMITED: (429, CODE_RATE_LIMITED),
 }
 
 
 def _raise_room_error(exc: RoomError) -> None:
+    status, code = _ERROR_MAP.get(exc.error_code, (400, CODE_BAD_REQUEST))
+    raise APIError(
+        status,
+        code,
+        exc.message,
+        error_code=exc.error_code,
+    )
+
+
+def _raise_message_error(exc: MessageError) -> None:
     status, code = _ERROR_MAP.get(exc.error_code, (400, CODE_BAD_REQUEST))
     raise APIError(
         status,
@@ -164,6 +179,30 @@ async def get_room(
         },
         request=request,
     )
+
+
+@router.get("/rooms/{room_id_or_code}/messages", summary="房间历史消息")
+async def list_room_messages(
+    request: Request,
+    room_id_or_code: str,
+    before: Optional[str] = None,
+    limit: int = messages_service.DEFAULT_PAGE_SIZE,
+    user=Depends(get_current_user),
+):
+    """按时间倒序返回历史消息；before 为上一页最后一条消息 id。"""
+    try:
+        room, _members = await rooms_service.get_room_for_member(
+            room_id_or_code, user
+        )
+        page = await messages_service.list_messages(
+            room, before=before, limit=limit
+        )
+    except RoomError as exc:
+        _raise_room_error(exc)
+    except MessageError as exc:
+        _raise_message_error(exc)
+
+    return ok(page, request=request)
 
 
 @router.patch("/rooms/{room_id_or_code}", summary="更新房间（仅房主）")
