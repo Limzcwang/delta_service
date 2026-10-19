@@ -30,9 +30,11 @@ from security.tokens import (
 from service import canvas as canvas_service
 from service import messages as messages_service
 from service import rooms as rooms_service
+from service import skills as skills_service
 from service.canvas import CanvasError
 from service.messages import MessageError, MessageRateLimiter
 from service.rooms import RoomError
+from service.skills import SkillError
 from service.user import UserService
 
 # 默认监听所有网卡，容器 -p 8765:8765 才能生效。
@@ -90,6 +92,7 @@ class WebSocketManager:
         self,
         chat_rate_limiter: Optional[MessageRateLimiter] = None,
         canvas_rate_limiter: Optional[MessageRateLimiter] = None,
+        skill_rate_limiter: Optional[MessageRateLimiter] = None,
     ):
         self.connected_clients: Set[WebSocketServerProtocol] = set()
         # user_id(str) -> ClientSession（单用户单连接）
@@ -101,6 +104,10 @@ class WebSocketManager:
         # 画板限频（独立实例，默认 30 条/秒/用户）
         self.canvas_rate_limiter = canvas_rate_limiter or MessageRateLimiter(
             max_messages=30, window_seconds=1.0
+        )
+        # 技能共享限频（独立实例，默认 2 条/秒/用户）
+        self.skill_rate_limiter = skill_rate_limiter or MessageRateLimiter(
+            max_messages=2, window_seconds=1.0
         )
         # 关房时落盘的最近画板状态（room_id -> {strokes, rev}）；不落库实时 op
         self.canvas_states: Dict[str, Dict[str, Any]] = {}
@@ -275,6 +282,10 @@ class WebSocketManager:
             await self._handle_canvas_op(session, data)
         elif message_type == "canvas_snapshot_save":
             await self._handle_canvas_snapshot_save(session, data)
+        elif message_type == "skill_share_update":
+            await self._handle_skill_share_update(session, data)
+        elif message_type == "skill_share_off":
+            await self._handle_skill_share_off(session)
         elif message_type == "ping":
             await self._send(session, {"type": "pong"})
         else:
@@ -398,6 +409,11 @@ class WebSocketManager:
         except Exception as exc:  # pragma: no cover - DB 异常降级为空板
             log_exception(exc, "加载画板状态失败", {"room": room.id})
             state = {"strokes": [], "rev": 0}
+        try:
+            skill_states = await skills_service.list_states(room.id)
+        except Exception as exc:  # pragma: no cover - DB 异常降级为空
+            log_exception(exc, "加载技能共享状态失败", {"room": room.id})
+            skill_states = []
         await self._send(
             session,
             {
@@ -409,6 +425,7 @@ class WebSocketManager:
                     "strokes": list(state.get("strokes") or []),
                     "rev": int(state.get("rev", 0) or 0),
                 },
+                "skill_states": skill_states,
                 "ts": int(time.time() * 1000),
             },
         )
@@ -425,6 +442,10 @@ class WebSocketManager:
         session.room_code = None
         session.canvas_rev = None
         await self._refresh_user(session)
+        try:
+            await skills_service.remove_state(room_id, getattr(session.user, "id"))
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "退出房间清理技能状态失败", {"room": room_id})
         await self.broadcast_to_room(
             room_id,
             self._user_event(
@@ -535,6 +556,10 @@ class WebSocketManager:
 
         room_code = session.room_code
         user = await self._refresh_user(session)
+        try:
+            await skills_service.remove_state(room_id, getattr(user, "id"))
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "摘除会话清理技能状态失败", {"room": room_id})
         session.room_id = None
         session.room_code = None
         session.canvas_rev = None
@@ -708,6 +733,76 @@ class WebSocketManager:
             log_exception(exc, "关房画板快照落盘失败", {"room": room_id})
             return 0
         return len(state.get("strokes") or [])
+
+    # ------------------------------------------------------------------ 技能共享
+    async def _handle_skill_share_update(
+        self, session: ClientSession, data: Dict[str, Any]
+    ) -> None:
+        if session.room_id is None:
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你还没有加入房间")
+            return
+        room_ref = data.get("room_id")
+        if not isinstance(room_ref, str) or not room_ref.strip():
+            await self._send_error(session, "INVALID_SKILL_PAYLOAD", "缺少 room_id")
+            return
+        if str(room_ref.strip()) != str(session.room_id):
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你不在该房间中")
+            return
+
+        try:
+            room = await rooms_service.resolve_room(session.room_id)
+            await rooms_service.ensure_member(room, session.user)
+            skills_service.validate_skill_payload(data)
+        except RoomError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except SkillError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+
+        if not self.skill_rate_limiter.check(session.user_id or ""):
+            await self._send_error(
+                session, "RATE_LIMITED", "技能共享更新过于频繁，请稍后再试"
+            )
+            return
+
+        try:
+            state = await skills_service.save_state(room, session.user, data)
+        except SkillError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except Exception as exc:  # pragma: no cover
+            log_exception(exc, "保存技能共享状态失败", {"room": session.room_id})
+            await self._send_error(session, "INTERNAL_ERROR", "保存技能状态失败")
+            return
+
+        payload = {"type": "skill_share_state"}
+        payload.update(state)
+        # 房间内所有人（含发送者）都收到
+        await self.broadcast_to_room(room.id, payload)
+
+    async def _handle_skill_share_off(self, session: ClientSession) -> None:
+        if session.room_id is None:
+            await self._send_error(session, "NOT_ROOM_MEMBER", "你还没有加入房间")
+            return
+        try:
+            room = await rooms_service.resolve_room(session.room_id)
+            await rooms_service.ensure_member(room, session.user)
+            await skills_service.remove_state(room.id, getattr(session.user, "id"))
+        except RoomError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except Exception as exc:  # pragma: no cover
+            log_exception(exc, "删除技能共享状态失败", {"room": session.room_id})
+            await self._send_error(session, "INTERNAL_ERROR", "删除技能状态失败")
+            return
+        await self.broadcast_to_room(
+            room.id,
+            {
+                "type": "skill_share_removed",
+                "user_id": str(getattr(session.user, "id", "")),
+            },
+        )
 
     # ------------------------------------------------------------------ 广播/清理
     async def broadcast(self, message: str) -> None:

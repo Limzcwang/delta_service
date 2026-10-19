@@ -27,6 +27,7 @@ from log.logger import log_exception
 from service import canvas as canvas_service
 from service import messages as messages_service
 from service import rooms as rooms_service
+from service import skills as skills_service
 from service.canvas import CanvasError
 from service.messages import MessageError
 from service.rooms import RoomError
@@ -74,6 +75,14 @@ def _raise_room_error(exc: RoomError) -> None:
         exc.message,
         error_code=exc.error_code,
     )
+
+
+async def _remove_skill_state_safely(room_id: Any, user_id: Any) -> None:
+    """E1：HTTP leave/kick 后无条件删除技能状态（不依赖 WS session 是否存在）。"""
+    try:
+        await skills_service.remove_state(room_id, int(user_id))
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "删除技能共享状态失败", {"room": room_id})
 
 
 def _raise_canvas_error(exc: CanvasError) -> None:
@@ -260,6 +269,24 @@ async def get_room_canvas(
     return ok(snapshot, request=request)
 
 
+@router.get("/rooms/{room_id_or_code}/skills", summary="房间技能共享状态")
+async def get_room_skills(
+    request: Request,
+    room_id_or_code: str,
+    user=Depends(get_current_user),
+):
+    """JWT + 房间成员；返回未 stale 的技能共享状态。"""
+    try:
+        room, _members = await rooms_service.get_room_for_member(
+            room_id_or_code, user
+        )
+        items = await skills_service.list_states(room.id)
+    except RoomError as exc:
+        _raise_room_error(exc)
+
+    return ok({"items": items}, request=request)
+
+
 @router.get("/rooms/{room_id_or_code}/messages", summary="房间历史消息")
 async def list_room_messages(
     request: Request,
@@ -324,6 +351,12 @@ async def close_room(
     except RoomError as exc:
         _raise_room_error(exc)
 
+    # E1：软删房间清理所有技能共享状态（含离线成员）
+    try:
+        await skills_service.clear_room(room.id)
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "软删房间清理技能状态失败", {"room": room_id_or_code})
+
     # F2：画板落盘 → 广播 room_deleted → 摘除全房 WS 会话（已删则上述基本为空操作）
     try:
         manager = _get_websocket_manager()
@@ -385,6 +418,9 @@ async def leave_room(
     except RoomError as exc:
         _raise_room_error(exc)
 
+    # E1：无条件删除该用户技能状态（即使其 WS 已断开/从未连接）
+    await _remove_skill_state_safely(room.id, user.id)
+
     # 安全：HTTP 退房成功后立即摘除该用户的 WS 房间会话，避免继续收 chat_message
     try:
         await _get_websocket_manager().detach_user_from_room(
@@ -410,6 +446,9 @@ async def kick_member(
         room = await rooms_service.resolve_room(room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # E1：无条件删除被踢者技能状态（即使其 WS 已断开/从未连接）
+    await _remove_skill_state_safely(room.id, payload.user_id)
 
     # H3：先给被踢者定向 room_kicked，再摘除其 WS 会话
     try:

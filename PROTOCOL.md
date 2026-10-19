@@ -195,7 +195,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | POST | `/api/v1/rooms/{room_id_or_code}/leave` | 离开房间 | – | `{left:true}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C，窗口 7/30 天） | `?before&limit` | `{items:[ChatMessage],has_more,next_before,window_days,truncated}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D，DB ∪ 内存增量） | – | `{strokes:[CanvasOp],rev,updated_at}` |
-| GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
+| GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能共享状态（E1，过滤 stale） | – | `{items:[SkillShareState]}` |
 
 `MyRoom`（`GET /api/v1/rooms/mine` 每项）= 现有房间公开字段 + `joined_at`（Unix 毫秒）+ `role`（`owner|member`），**不含 password_hash**。该接口需 JWT；只返回当前用户已加入、未关闭未删除的房间（公开/私有均含，私有房已是成员故无需密码）。**未关闭/未删除过滤在 SQL 层完成后再分页**（无效房不占 limit 名额），按 `room_members.joined_at` 倒序；游标 `before` 为上一页最后一项的 `joined_at` 毫秒（同毫秒并列极少，按 joined_at 游标）；`next_before` 同类型；`page/page_size` 为客户端兼容参数（无 `before` 时按 page 偏移，有 before 时以游标为准）。`/rooms/mine` 必须声明在 `/rooms/{room_id_or_code}` 之前。
 
@@ -313,7 +313,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `chat_send` | 发聊天消息（C） | 是 | 见下 |
 | `canvas_op` | 画板增量（D） | 是 | 见下 |
 | `canvas_snapshot_save` | 保存画板全量快照（D） | 是 | 见下 |
-| `skill_report` | 上报技能快照（E） | 是 | 见下 |
+| `skill_share_update` | 上报技能共享状态（E1） | 是 | 见 §6.8 |
+| `skill_share_off` | 关闭技能共享（E1） | 是 | 见 §6.8 |
 | `ping` | 心跳 | 否 | `{"type":"ping","ts":1750000000000}` |
 
 ```json
@@ -328,7 +329,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 {"type":"canvas_op","room_id":"01J8Z9K3Q7","rev":12,"op":{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}}
 ```
 ```json
-{"type":"skill_report","ts":1750000000123,"skills":[{"id":"skill-a","name":"闪现","ready_at":1750000008000,"total":1200}]}
+{"type":"skill_share_update","room_id":"01J8Z9K3Q7","operator_id":"op-1","operator_name":"干员","skills":[{"slot":0,"state":"charging","remaining_ms":12000,"charges":0,"max_charges":1,"pct":30}],"captured_at":1750000000123}
 ```
 
 ### 6.4 服务端 → 客户端
@@ -344,7 +345,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `chat_message` | 聊天消息（C） |
 | `canvas_op` | 画板增量广播（D，不含发送者，附 user_id/rev） |
 | `canvas_snapshot_saved` | 画板快照保存确认（D） |
-| `skill_state` | 某用户最新技能快照（E） |
+| `skill_share_state` | 某用户最新技能共享状态（E1，含发送者） |
+| `skill_share_removed` | 某用户关闭共享（E1） |
 | `heartbeat` | 心跳 |
 | `pong` | 对 ping 的响应 |
 | `error` | 错误（§7.2） |
@@ -366,6 +368,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
   },
   "members": [{"id": "1", "nickname": "Alice", "online": true}],
   "canvas_snapshot": {"strokes": [], "rev": 0},
+  "skill_states": [],
   "ts": 1750000000000
 }
 ```
@@ -423,10 +426,12 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
  "op":{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}}
 ```
 
-`skill_state`（E）：
+`skill_share_state`（E1，实际结构见 §6.8）：
 
 ```json
-{"type":"skill_state","room_id":"01J8Z9K3Q7","user_id":"1","ts":1750000000123,"skills":[{"id":"skill-a","name":"闪现","ready_at":1750000008000,"total":1200}]}
+{"type":"skill_share_state","user_id":"1","nickname":"Alice","operator_id":"op-1","operator_name":"干员",
+ "skills":[{"slot":0,"state":"charging","remaining_ms":12000,"charges":0,"max_charges":1,"pct":30}],
+ "captured_at":1750000000123,"updated_at":1750000000200}
 ```
 
 `heartbeat` / `pong` / `error`：
@@ -456,7 +461,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 旧 `authenticate` | **已移除**：返回 `auth_error`（`AUTH_INVALID`）并关闭 |
 | 未认证消息 | `error`，`code=NOT_AUTHENTICATED`，连接保持（可继续尝试 auth） |
 | 单用户单连接 | 新连接认证成功时关闭旧连接（close code 4000），旧连接退出房间并广播 `user_left(reason=replaced)` |
-| 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`canvas_op`、`canvas_snapshot_save`、`ping`；`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（E 实现） |
+| 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`canvas_op`、`canvas_snapshot_save`、`skill_share_update`、`skill_share_off`、`ping`；旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE` |
 | chat_send | 需已进房；限频 5 条/秒/用户（超限 `RATE_LIMITED`）；空/超长（>2000）`INVALID_MESSAGE`；非成员 `NOT_ROOM_MEMBER`；成功后广播 `chat_message` 给房间内所有连接（含发送者），`client_msg_id` 原样回传 |
 | 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id（字符串），`limit` 默认 50/上限 100；需 JWT + 房间成员；响应额外含 `window_days`（7/30，按 joined_at）与 `truncated`（是否有早于窗口的历史被截断） |
 | HTTP leave/kick | 成功后服务端摘除该用户在当前房间的 WS 会话（不再收 `chat_message`，在线状态消失），并向余下成员广播 `user_left(reason=left\|kicked)` |
@@ -467,7 +472,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 心跳 | 服务端每 30s 下发 `heartbeat`，客户端 90s 未收到可重连；保留 `ping→pong` |
 | 错误格式 | `{"type":"error","code":"...","error_code":"...","message":"..."}`：`code` 为新协议字段，`error_code` 为旧字段兼容（同值） |
 | 房间事件 | `user_joined`/`user_left` 载荷 `user{id,nickname}`；另有 `room_updated`、`room_deleted`、`room_kicked`；`room_kicked` 仅发被踢者（`by{id,nickname}`），随后摘除其会话；`user_left.reason` 含 disconnected/left/kicked/replaced/closed/deleted |
-| 画板/技能 | `room_joined` 已含 `canvas_snapshot{strokes,rev}`；**不包含** `skill_state`（E 阶段加入） |
+| 画板/技能 | `room_joined` 含 `canvas_snapshot{strokes,rev}` 与 `skill_states:[SkillShareState]`（E1；stale 已过滤） |
 
 ### 6.7 共享画板（D 当前实现）
 
@@ -506,6 +511,48 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 **HTTP**
 
 `GET /api/v1/rooms/{room_id_or_code}/canvas`（JWT + 成员）：无快照返回 `{"strokes":[],"rev":0,"updated_at":null}`；有快照返回 `{"strokes":[...],"rev":N,"updated_at":毫秒}`。错误沿用 `ROOM_NOT_FOUND`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`，业务码在 `data.error_code`。房间关闭后其成员 WS 会话已被摘除，后续 `chat_send`/`canvas_op` 返回 `NOT_ROOM_MEMBER`。
+
+### 6.8 技能共享（E1）
+
+槽位固定（按键因人而异，由客户端识别后上报）：
+
+| slot | 含义 |
+|---|---|
+| 0 | 大招（百分比，可带 `pct`） |
+| 1 | 技能（充能 + CD） |
+| 2 | 投掷物（充能 + CD） |
+
+**C→S `skill_share_update`**
+
+```json
+{"type":"skill_share_update","room_id":"01J8Z9K3Q7","operator_id":"op-1","operator_name":"干员",
+ "skills":[
+   {"slot":0,"state":"charging","remaining_ms":12000,"charges":0,"max_charges":1,"pct":30},
+   {"slot":1,"state":"ready","remaining_ms":0,"charges":2,"max_charges":2},
+   {"slot":2,"state":"unknown","remaining_ms":0,"charges":1,"max_charges":1}],
+ "captured_at":1750000000123}
+```
+
+- 已认证 + 已进房且仍是成员；`room_id` 必须与当前频道一致。
+- 校验：`skills` 恰好 3 条且 `slot` 为 0/1/2 不重复；`state` ∈ ready/charging/unknown；`remaining_ms` 0–600000；`max_charges` 1–9；`charges` 0–max_charges；`pct` 可选 0–100；`operator_id`/`operator_name` ≤32 字符；`captured_at` 非负毫秒。非法 → `INVALID_SKILL_PAYLOAD`。
+- 限频 **2 条/秒/用户**，超限 `RATE_LIMITED`（不落库、不广播）。
+
+**S→房间 `skill_share_state`**（所有房间连接，含发送者）：
+
+```json
+{"type":"skill_share_state","user_id":"1","nickname":"Alice","operator_id":"op-1","operator_name":"干员",
+ "skills":[...],"captured_at":1750000000123,"updated_at":1750000000200}
+```
+
+服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。
+
+**新成员**：`room_joined.skill_states` 为当前房间所有人最新状态的数组（结构同上，stale 已过滤）。
+
+**C→S `skill_share_off`**：删除该用户状态，并向房间内所有人广播 `{"type":"skill_share_removed","user_id":"1"}`。
+
+**HTTP**：`GET /api/v1/rooms/{room_id_or_code}/skills`（JWT+房间成员）返回 `{"items":[SkillShareState]}`。
+
+**时间/清理**：`updated_at` 超过 **30 分钟**未更新的状态视为「未共享」，GET 与 `room_joined` **直接过滤掉**（不返回 stale 字段）；关房/软删清理整房状态；HTTP/WS 的 leave、kick 即使目标当前无 WS 连接也**无条件在 DB 删除**该用户状态（`skill_share_off` 由 WS 会话触发，但删除走 DB 直删）；客户端重连后重新上报。
 
 ## 7. 错误码与状态码
 
@@ -565,6 +612,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `UNSUPPORTED_MESSAGE_TYPE` | 当前版本未实现的消息类型 |
 | `CANVAS_OUT_OF_ORDER` | 画板 op 的 rev 非递增（乱序/回退，丢弃） |
 | `INVALID_CANVAS_OP` | 画板 op/快照字段、坐标、点数、大小非法 |
+| `INVALID_SKILL_PAYLOAD` | 技能共享载荷结构/槽位/范围/长度非法 |
 | `INTERNAL_ERROR` | 服务端内部错误 |
 
 安全约定（与现有实现一致）：错误响应不含异常堆栈/SQL/连接串；服务端日志通过 `request_id`/`user_id` 对账。
@@ -583,13 +631,14 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ROOM_CLOSED` | 409 | 40901 |
 | `RATE_LIMITED` | 429 | 42900 |
 | `INVALID_CANVAS_OP` | 400 | 40000 |
+| `INVALID_SKILL_PAYLOAD` | 400 | 40000 |
 | `ROOM_FORBIDDEN` | 403 | 40300 |
 | `INVALID_USERNAME` / `INVALID_NICKNAME` / `WRONG_OLD_PASSWORD` / `INVALID_NEW_PASSWORD` | 400 | 40000 |
 | `ROOM_CODE_GENERATION_FAILED` | 500 | 50000 |
 
 成功响应的 `data` 为业务数据；错误响应 `data={"error_code":"..."}`，客户端按该字符串分支（如弹房间密码框）。
 
-## 8. 技能共享（里程碑 E）
+## 8. 技能共享（里程碑 E，实际协议以 §6.8/E1 为准；本章为早期设计背景）
 
 | 项 | 约定 |
 |---|---|
@@ -597,7 +646,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | 上报频率 | 每 **1–2 秒**一次全量快照（不是增量） |
 | 服务端限频 | 建议每人 **2 次/秒**（超出丢弃，必要时回 `RATE_LIMITED`；不因超频断开连接） |
 | 广播范围 | 仅房间内成员；发送者自己也会收到回显（便于确认） |
-| 保留策略 | 服务端按 `(room_id, user_id)` 保留**最近一份**；新成员加入时通过 `room_joined.skill_state` 或 `GET /skills` 拉取 |
+| 保留策略 | 服务端按 `(room_id, user_id)` 保留**最近一份**；新成员加入时通过 `room_joined.skill_states` 或 `GET /skills` 拉取（实际字段以 §6.8 为准） |
 | 离开房间 | 删除该房间内该用户的技能状态 |
 | 载荷上限 | `skills` ≤ 64 项，单条 `name` ≤ 32 字符，整体 JSON ≤ 8KB |
 
