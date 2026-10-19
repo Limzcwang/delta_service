@@ -6,12 +6,14 @@ from api.room import router as room_router
 from api.user import router as user_router
 from api.v1_auth import router as v1_router
 from api.v1_common import APIError, api_error_handler
+from api.v1_config import router as v1_config_router
 from api.v1_rooms import router as v1_rooms_router
 from api.ws import router as ws_router
 from config.database import DATABASE_CONFIG
 from log.api_logger import APILoggingMiddleware, LoggingRoute
 from log.logger import GlobalLogger
 from log.sql_logger import init_sql_logging
+from service.config_center import load_operator_config
 from service.message_cleanup import MessageCleanupTask
 
 
@@ -56,6 +58,7 @@ def create_app():
     app.include_router(user_router)
     app.include_router(v1_router)
     app.include_router(v1_rooms_router)
+    app.include_router(v1_config_router)
     # 单端口 WebSocket：ws://<host>:8000/ws
     app.include_router(ws_router)
 
@@ -73,6 +76,9 @@ def create_app():
 
         # 初始化SQL日志记录
         await init_sql_logging()
+
+        # 启动时加载运营干员配置（文件变更后重启生效；失败时接口返回 503）
+        load_operator_config()
 
         # 启动聊天消息保留期清理任务（默认 30 天保留，每日一次）
         message_cleanup.start()
