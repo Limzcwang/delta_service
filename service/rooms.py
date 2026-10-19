@@ -292,6 +292,14 @@ async def get_room_for_member(
     return room, await list_members(room)
 
 
+async def ensure_member(room: Room, user) -> None:
+    """校验房间未关闭且用户是房间成员（聊天等房间内操作复用）。"""
+    _ensure_open(room)
+    membership = await RoomMemberDao.get(room.id, getattr(user, "id", None))
+    if membership is None:
+        raise RoomError(ERR_NOT_ROOM_MEMBER, "你不在该房间中", 403)
+
+
 async def join_room(
     user,
     room_id_or_code: str,

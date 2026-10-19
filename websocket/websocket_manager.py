@@ -27,7 +27,9 @@ from security.tokens import (
     TokenInvalidError,
     decode_access_token,
 )
+from service import messages as messages_service
 from service import rooms as rooms_service
+from service.messages import MessageError, MessageRateLimiter
 from service.rooms import RoomError
 from service.user import UserService
 
@@ -80,12 +82,14 @@ class ClientSession:
 class WebSocketManager:
     """WebSocket 连接/认证/房间频道管理器（表现层）。"""
 
-    def __init__(self):
+    def __init__(self, chat_rate_limiter: Optional[MessageRateLimiter] = None):
         self.connected_clients: Set[WebSocketServerProtocol] = set()
         # user_id(str) -> ClientSession（单用户单连接）
         self.sessions: Dict[str, ClientSession] = {}
         # 兼容旧代码的 username -> websocket 映射（仅诊断用）
         self.user_websocket_map: Dict[str, WebSocketServerProtocol] = {}
+        # 聊天限频（默认 5 条/秒/用户，可注入时钟/替换）
+        self.chat_rate_limiter = chat_rate_limiter or MessageRateLimiter()
         # 防止重复调用 run_websocket_server 时叠加 server/后台任务
         self._server_running = False
 
@@ -249,6 +253,8 @@ class WebSocketManager:
             await self._handle_join_room(session, data)
         elif message_type == "leave_room":
             await self._handle_leave_room(session, reply=True)
+        elif message_type == "chat_send":
+            await self._handle_chat_send(session, data)
         elif message_type == "ping":
             await self._send(session, {"type": "pong"})
         else:
@@ -385,6 +391,54 @@ class WebSocketManager:
                     "room_code": room_code,
                 },
             )
+
+    # ------------------------------------------------------------------ 聊天
+    async def _handle_chat_send(self, session: ClientSession, data: Dict[str, Any]) -> None:
+        """校验成员/内容/限频后持久化，并向房间内所有连接（含本人）广播。"""
+        if session.room_id is None:
+            await self._send_error(
+                session, "NOT_ROOM_MEMBER", "你还没有加入房间"
+            )
+            return
+
+        try:
+            room = await rooms_service.resolve_room(session.room_id)
+            content = messages_service.normalize_content(data.get("content"))
+            client_msg_id = messages_service.normalize_client_msg_id(
+                data.get("client_msg_id")
+            )
+        except RoomError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except MessageError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+
+        if not self.chat_rate_limiter.check(session.user_id or ""):
+            await self._send_error(
+                session, "RATE_LIMITED", "发送过于频繁，请稍后再试"
+            )
+            return
+
+        try:
+            message = await messages_service.send_message(
+                session.user, room, content, client_msg_id
+            )
+        except RoomError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except MessageError as exc:
+            await self._send_error(session, exc.error_code, exc.message)
+            return
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "WS 发送聊天消息失败", {"room": session.room_id})
+            await self._send_error(session, "INTERNAL_ERROR", "发送消息失败")
+            return
+
+        payload: Dict[str, Any] = {"type": "chat_message"}
+        payload.update(message)
+        # 包含发送者本人（客户端依赖 client_msg_id 去重/回显）
+        await self.broadcast_to_room(room.id, payload)
 
     # ------------------------------------------------------------------ 广播/清理
     async def broadcast(self, message: str) -> None:
