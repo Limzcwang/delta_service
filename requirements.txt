@@ -7,3 +7,4 @@ PyMySQL~=1.1.2
 aiomysql~=0.3.0
 aiofiles>=23.0.0
 tortoise-orm ~=1.1.0
+PyJWT~=2.10

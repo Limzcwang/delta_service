@@ -4,6 +4,8 @@ from tortoise.contrib.fastapi import register_tortoise
 
 from api.room import router as room_router
 from api.user import router as user_router
+from api.v1_auth import router as v1_router
+from api.v1_common import APIError, api_error_handler
 from config.database import DATABASE_CONFIG
 from log.api_logger import APILoggingMiddleware, LoggingRoute
 from log.logger import GlobalLogger
@@ -30,6 +32,9 @@ def create_app():
     # 添加API日志中间件
     app.add_middleware(APILoggingMiddleware)
 
+    # v1 业务异常 → 统一 {code,message,data,request_id?} 响应包
+    app.add_exception_handler(APIError, api_error_handler)
+
     # 注册Tortoise ORM
     register_tortoise(
         app,
@@ -41,9 +46,10 @@ def create_app():
     # 使用自定义路由类（支持路由级别日志）
     app.router.route_class = LoggingRoute
 
-    # 注册路由
+    # 注册路由（v1 新接口 + 旧接口过渡期并存）
     app.include_router(room_router)
     app.include_router(user_router)
+    app.include_router(v1_router)
 
     # 健康检查端点
     @app.get("/health")
