@@ -206,6 +206,63 @@ def room_to_dict(room: Room, member_count: int) -> Dict[str, Any]:
     }
 
 
+def my_room_to_dict(room: Room, member: RoomMember, member_count: int) -> Dict[str, Any]:
+    """H1：房间公开字段 + joined_at(ms) + role；不含 password_hash。"""
+    data = room_to_dict(room, member_count)
+    joined_at = getattr(member, "joined_at", None)
+    data["joined_at"] = _dt_to_ms(joined_at)
+    data["role"] = getattr(member, "role", "member")
+    return data
+
+
+async def list_my_rooms(
+    user,
+    limit: int = DEFAULT_PAGE_SIZE,
+    before: Any = None,
+    offset: int = 0,
+) -> Tuple[List[Dict[str, Any]], bool, Optional[int]]:
+    """H1：当前用户已加入、未关闭未删除的房间，按 joined_at 倒序。"""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise RoomError("INVALID_PAGINATION", "limit 必须是整数") from exc
+    if not 1 <= limit <= MAX_PAGE_SIZE:
+        raise RoomError("INVALID_PAGINATION", f"limit 需在 1-{MAX_PAGE_SIZE} 之间")
+    try:
+        offset = int(offset or 0)
+    except (TypeError, ValueError) as exc:
+        raise RoomError("INVALID_PAGINATION", "page 非法") from exc
+    if offset < 0:
+        raise RoomError("INVALID_PAGINATION", "page 非法")
+    before_dt = _ms_to_datetime(before)
+
+    memberships = await RoomMemberDao.list_for_user(
+        getattr(user, "id", None), limit, before_dt, offset
+    )
+    memberships = [
+        member
+        for member in memberships
+        if getattr(member, "room", None) is not None
+        and getattr(member.room, "closed_at", None) is None
+        and not getattr(member.room, "deleted", False)
+    ]
+    has_more = len(memberships) > limit
+    page = memberships[:limit]
+    items = []
+    for member in page:
+        items.append(
+            my_room_to_dict(
+                member.room,
+                member,
+                await RoomMemberDao.count(member.room.id),
+            )
+        )
+    next_before = None
+    if has_more and page:
+        next_before = _dt_to_ms(getattr(page[-1], "joined_at", None))
+    return items, has_more, next_before
+
+
 async def create_room(
     owner,
     name: str,

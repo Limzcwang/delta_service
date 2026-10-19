@@ -187,6 +187,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | POST | `/api/v1/users/me/password` | 修改密码 | `{old_password,new_password}` | `{changed:true}` |
 | POST | `/api/v1/rooms` | 创建房间（房主=当前用户） | `{name, visibility:"public"\|"private", password?, background_id?}` | `{room}` |
 | GET | `/api/v1/rooms` | 公共房间列表（分页） | `?limit&before` | `{items:[RoomSummary],has_more,next_before}` |
+| GET | `/api/v1/rooms/mine` | 我的房间（已加入、未关闭未删除，公开+私有） | `?page=1&page_size=20&before=` | `{items:[MyRoom],has_more,next_before}` |
 | GET | `/api/v1/rooms/{room_id_or_code}` | 房间详情（成员/在线/房主/底图） | – | `{room,members:[UserSummary]}` |
 | PATCH | `/api/v1/rooms/{room_id_or_code}` | 房主改名称/密码（不可改 visibility/background） | `{name?,password? (null=清除)}` | `{room}` |
 | DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主软删除房间 | – | `{deleted:true}` |
@@ -195,6 +196,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C，窗口 7/30 天） | `?before&limit` | `{items:[ChatMessage],has_more,next_before,window_days,truncated}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D，DB ∪ 内存增量） | – | `{strokes:[CanvasOp],rev,updated_at}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
+
+`MyRoom`（`GET /api/v1/rooms/mine` 每项）= 现有房间公开字段 + `joined_at`（Unix 毫秒）+ `role`（`owner|member`），**不含 password_hash**。该接口需 JWT；只返回当前用户已加入、未关闭未删除的房间（公开/私有均含，私有房已是成员故无需密码）。按 `room_members.joined_at` 倒序；游标 `before` 为上一页最后一项的 `joined_at` 毫秒（同毫秒并列极少，按 joined_at 游标）；`next_before` 同类型；`page/page_size` 为客户端兼容参数（无 `before` 时按 page 偏移，有 before 时以游标为准）。`/rooms/mine` 必须声明在 `/rooms/{room_id_or_code}` 之前。
 
 `RoomSummary`（公共列表字段，产品要求）：
 
@@ -227,7 +230,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 房间名 | 1–30 字符（去首尾空白），房主可改 |
 | 成员上限 | 建议 8 人（开放问题） |
 | 加入 | 按 `room_code` 或 `room_id`；private 且 `has_password` 必须带 `password`；已在房间内视为幂等成功 |
-| 离开 | 房主离开需先关闭房间或转让（开放问题） |
+| 离开 | 普通成员 `POST /rooms/{id}/leave` 成功；房主离开返回 `ROOM_OWNER_MUST_CLOSE`（409/40900），必须先关房/软删（H1 客户端按 role 显示「关闭」）；退出后 DB 成员关系删除、WS 会话摘除、其他成员收 `user_left(left)`，且不再出现在 `/rooms/mine` |
 | 房主权限 | 改名称/密码、踢人、软删除房间、清空画板；visibility 不可切换（F3）；底图沿用创建时配置 |
 | 公共列表 | 字段见 RoomSummary；仅返回未关闭、未软删的 public 房间；支持分页 |
 | 生命周期 | 房间落 MySQL；`DELETE` 为软删除（deleted=true+closed_at），不物理删；软删后列表/详情/历史/画板/加入均 `ROOM_NOT_FOUND`（选此语义，不暴露删除状态）；软删 code 不复用；房主重复 DELETE 幂等成功 |
@@ -540,6 +543,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ALREADY_AUTHENTICATED` | 已认证后重复发送 `auth` |
 | `NOT_ROOM_MEMBER` | 非房间成员（聊天/历史接口/未进房） |
 | `ROOM_FORBIDDEN` | 非房主执行 PATCH/DELETE 等房主操作 |
+| `ROOM_OWNER_MUST_CLOSE` | 房主直接 leave（需先关闭/软删房间） |
 | `NOT_ROOM_OWNER` | 非房主执行房主操作（如踢人/关闭） |
 | `MEMBER_NOT_FOUND` | 目标成员不存在 |
 | `ROOM_NOT_FOUND` | 房间不存在 |

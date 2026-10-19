@@ -179,6 +179,40 @@ async def list_rooms(
     )
 
 
+@router.get("/rooms/mine", summary="我的房间")
+async def list_my_rooms(
+    request: Request,
+    page: int = 1,
+    page_size: int = rooms_service.DEFAULT_PAGE_SIZE,
+    before: Optional[int] = None,
+    user=Depends(get_current_user),
+):
+    """H1：当前用户已加入、未关闭未删除的房间（公开/私有均含）。"""
+    if page < 1 or page_size < 1:
+        raise APIError(
+            400,
+            CODE_BAD_REQUEST,
+            "page/page_size 必须是正整数",
+            error_code="INVALID_PAGINATION",
+        )
+    offset = 0 if before is not None else (page - 1) * page_size
+    try:
+        items, has_more, next_before = await rooms_service.list_my_rooms(
+            user, page_size, before, offset
+        )
+    except RoomError as exc:
+        _raise_room_error(exc)
+
+    return ok(
+        {
+            "items": items,
+            "has_more": has_more,
+            "next_before": next_before,
+        },
+        request=request,
+    )
+
+
 @router.get("/rooms/{room_id_or_code}", summary="房间详情")
 async def get_room(
     request: Request,
