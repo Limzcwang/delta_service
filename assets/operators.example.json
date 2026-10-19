@@ -1,0 +1,7 @@
+{
+  "_meta": {
+    "schema": 1,
+    "note": "运营干员配置示例；复制为 assets/operators.json 后由镜像/配置中心下发。version/etag 由服务端按文件内容自动计算，无需手写。"
+  },
+  "operators": []
+}

@@ -1,0 +1,7 @@
+{
+  "_meta": {
+    "schema": 1,
+    "note": "服务端配置中心占位文件；由运营替换为实际干员配置。version/etag 自动取文件内容 sha256 前 16 位。"
+  },
+  "operators": []
+}

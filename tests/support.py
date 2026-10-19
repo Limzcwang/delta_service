@@ -73,7 +73,17 @@ class FakeJSONResponse:
     def __init__(self, status_code: int = 200, content=None, **kwargs):
         self.status_code = status_code
         self.content = content
+        self.headers = kwargs.get("headers") or {}
         self.body = json.dumps(content, ensure_ascii=False).encode("utf-8")
+
+
+class FakeResponse:
+    """fastapi.responses.Response 的最小替身（304 等无 body 响应）。"""
+
+    def __init__(self, status_code: int = 200, content=None, headers=None, **kwargs):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.body = content if isinstance(content, bytes) else (b"" if content is None else str(content).encode("utf-8"))
 
 
 def install_tortoise_stub():
@@ -204,10 +214,15 @@ def install_fastapi_stub():
         WebSocket=object,
         WebSocketDisconnect=StubWebSocketDisconnect,
         Depends=lambda dependency: dependency,
+        Response=FakeResponse,
         status=_StubStatus,
     )
     # v1 统一响应包会用到 fastapi.responses.JSONResponse
-    _replace_module("fastapi.responses", JSONResponse=FakeJSONResponse)
+    _replace_module(
+        "fastapi.responses",
+        JSONResponse=FakeJSONResponse,
+        Response=FakeResponse,
+    )
 
 
 def install_pydantic_stub():
