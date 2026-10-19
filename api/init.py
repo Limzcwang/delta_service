@@ -6,6 +6,7 @@ from api.room import router as room_router
 from api.user import router as user_router
 from api.v1_auth import router as v1_router
 from api.v1_common import APIError, api_error_handler
+from api.v1_rooms import router as v1_rooms_router
 from config.database import DATABASE_CONFIG
 from log.api_logger import APILoggingMiddleware, LoggingRoute
 from log.logger import GlobalLogger
@@ -50,6 +51,7 @@ def create_app():
     app.include_router(room_router)
     app.include_router(user_router)
     app.include_router(v1_router)
+    app.include_router(v1_rooms_router)
 
     # 健康检查端点
     @app.get("/health")

@@ -33,11 +33,14 @@ class APIError(Exception):
         code: int,
         message: str,
         headers: Optional[Dict[str, str]] = None,
+        error_code: Optional[str] = None,
     ):
         self.status_code = status_code
         self.code = code
         self.message = message
         self.headers = headers or {}
+        # 业务字符串错误码（客户端据此做特定交互，如弹房间密码框）
+        self.error_code = error_code
         super().__init__(message)
 
 
@@ -54,9 +57,15 @@ def ok(
     return body
 
 
-def error_body(code: int, message: str, request: Any = None) -> Dict[str, Any]:
-    """构造错误响应体。"""
-    body: Dict[str, Any] = {"code": code, "message": message, "data": None}
+def error_body(
+    code: int,
+    message: str,
+    request: Any = None,
+    error_code: Optional[str] = None,
+) -> Dict[str, Any]:
+    """构造错误响应体；error_code 放在 data.error_code（客户端依赖）。"""
+    data = {"error_code": error_code} if error_code else None
+    body: Dict[str, Any] = {"code": code, "message": message, "data": data}
     if request is not None:
         body["request_id"] = resolve_request_id(request)
     return body
@@ -66,6 +75,8 @@ async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
     """FastAPI 异常处理器：APIError → v1 统一错误包。"""
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_body(exc.code, exc.message, request),
+        content=error_body(
+            exc.code, exc.message, request, error_code=exc.error_code
+        ),
         headers=exc.headers or None,
     )
