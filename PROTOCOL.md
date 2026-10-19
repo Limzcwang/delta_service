@@ -340,6 +340,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `user_joined` / `user_left` | 房间成员变化（user 只用 nickname） |
 | `room_updated` | 房主修改 name/password 后广播 `{room_id,name,visibility,has_password}` |
 | `room_deleted` | 房间软删后广播给在线成员，随后会话被摘除 |
+| `room_kicked` | 踢人成功、摘除会话前**定向**发送给被踢者 |
 | `chat_message` | 聊天消息（C） |
 | `canvas_op` | 画板增量广播（D，不含发送者，附 user_id/rev） |
 | `canvas_snapshot_saved` | 画板快照保存确认（D） |
@@ -388,6 +389,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ```json
 {"type":"room_updated","room_id":"01J8Z9K3Q7","name":"新房间名","visibility":"private","has_password":true}
 {"type":"room_deleted","room_id":"01J8Z9K3Q7","room_code":"A1B2C"}
+{"type":"room_kicked","room_id":"01J8Z9K3Q7","room_code":"A1B2C","reason":"kicked","by":{"id":"1","nickname":"Alice"}}
 ```
 
 > 软删后不暴露删除状态：所有访问返回 `ROOM_NOT_FOUND`；房主重复 DELETE 幂等成功。`room_deleted` 发送后服务端会摘除该房间全部 WS 会话。
@@ -464,7 +466,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
 | 心跳 | 服务端每 30s 下发 `heartbeat`，客户端 90s 未收到可重连；保留 `ping→pong` |
 | 错误格式 | `{"type":"error","code":"...","error_code":"...","message":"..."}`：`code` 为新协议字段，`error_code` 为旧字段兼容（同值） |
-| 房间事件 | `user_joined`/`user_left` 载荷 `user{id,nickname}`；另有 `room_updated`、`room_deleted`；`user_left.reason` 含 disconnected/left/kicked/replaced/closed/deleted |
+| 房间事件 | `user_joined`/`user_left` 载荷 `user{id,nickname}`；另有 `room_updated`、`room_deleted`、`room_kicked`；`room_kicked` 仅发被踢者（`by{id,nickname}`），随后摘除其会话；`user_left.reason` 含 disconnected/left/kicked/replaced/closed/deleted |
 | 画板/技能 | `room_joined` 已含 `canvas_snapshot{strokes,rev}`；**不包含** `skill_state`（E 阶段加入） |
 
 ### 6.7 共享画板（D 当前实现）

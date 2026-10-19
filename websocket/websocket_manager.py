@@ -491,6 +491,32 @@ class WebSocketManager:
         # 包含发送者本人（客户端依赖 client_msg_id 去重/回显）
         await self.broadcast_to_room(room.id, payload)
 
+    async def notify_user_kicked(
+        self, user_id: Any, room_id: Any, room_code: Any, by_user: Any
+    ) -> bool:
+        """H3：踢人成功、摘除会话前，向被踢者的当前连接定向发送 room_kicked。
+
+        仅当该用户有连接且正在该房间时发送；无连接/不在该房间返回 False。
+        """
+        session = self.sessions.get(str(user_id))
+        if (
+            session is None
+            or session.room_id is None
+            or str(session.room_id) != str(room_id)
+        ):
+            return False
+        await self._send(
+            session,
+            {
+                "type": "room_kicked",
+                "room_id": str(room_id),
+                "room_code": room_code,
+                "reason": "kicked",
+                "by": self._user_payload(by_user),
+            },
+        )
+        return True
+
     async def detach_user_from_room(
         self, user_id: Any, room_id: Any, reason: str = "left"
     ) -> bool:

@@ -188,7 +188,8 @@ class JoinLeaveApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
 
     async def test_leave_success(self):
         manager = SimpleNamespace(
-            detach_user_from_room=mock.AsyncMock(return_value=True)
+            notify_user_kicked=mock.AsyncMock(return_value=True),
+            detach_user_from_room=mock.AsyncMock(return_value=True),
         )
         with mock.patch.object(
             v1_rooms.rooms_service,
@@ -249,7 +250,8 @@ class RoomOwnerApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual("deleted", manager.detach_room_sessions.await_args.kwargs["reason"])
 
         manager = SimpleNamespace(
-            detach_user_from_room=mock.AsyncMock(return_value=True)
+            notify_user_kicked=mock.AsyncMock(return_value=True),
+            detach_user_from_room=mock.AsyncMock(return_value=True),
         )
         with mock.patch.object(
             v1_rooms.rooms_service,
@@ -266,6 +268,8 @@ class RoomOwnerApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
                 DummyRequest(), "A1B2C", v1_rooms.KickMemberRequest(user_id="2"), self.user
             )
         self.assertEqual({"members": []}, response["data"])
+        manager.notify_user_kicked.assert_awaited_once()
+        self.assertEqual("2", manager.notify_user_kicked.await_args.args[0])
         manager.detach_user_from_room.assert_awaited_once_with(
             "2", "room-1", reason="kicked"
         )

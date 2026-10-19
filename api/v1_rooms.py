@@ -411,12 +411,26 @@ async def kick_member(
     except RoomError as exc:
         _raise_room_error(exc)
 
-    # 安全：被踢成员立即摘除 WS 房间会话并广播 user_left(reason=kicked)
+    # H3：先给被踢者定向 room_kicked，再摘除其 WS 会话
     try:
-        await _get_websocket_manager().detach_user_from_room(
-            payload.user_id, room.id, reason="kicked"
-        )
+        manager = _get_websocket_manager()
     except Exception as exc:  # pragma: no cover - 防御性
-        log_exception(exc, "HTTP kick 摘除 WS 会话失败", {"room": room_id_or_code})
+        log_exception(exc, "踢人获取 WS 管理器失败", {"room": room_id_or_code})
+    else:
+        try:
+            await manager.notify_user_kicked(
+                payload.user_id,
+                room.id,
+                getattr(room, "code", None),
+                user,
+            )
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "发送 room_kicked 失败", {"room": room_id_or_code})
+        try:
+            await manager.detach_user_from_room(
+                payload.user_id, room.id, reason="kicked"
+            )
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "HTTP kick 摘除 WS 会话失败", {"room": room_id_or_code})
 
     return ok({"members": members}, request=request)
