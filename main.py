@@ -108,7 +108,8 @@ async def main():
         # 初始化服务
         await init_services()
 
-        # 同时启动多个服务
+        # 后台任务唯一启动点：data_pusher / inactive_user_checker 只在这里启动，
+        # websocket_manager.run_websocket_server() 不再重复 create_task。
         await asyncio.gather(
             websocket_manager.run_websocket_server(),
             run_api_server(),

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from typing import Set, Dict, Optional
 
@@ -13,6 +14,32 @@ from service.room import get_room_info
 from service.user import UserService
 from service.websocket_service import WebSocketService
 
+# 默认监听所有网卡，容器 -p 8765:8765 才能生效。
+# 生产环境必须用云安全组/防火墙或反向代理限制可访问来源。
+DEFAULT_WS_HOST = "0.0.0.0"
+DEFAULT_WS_PORT = 8765
+
+
+def get_ws_bind_address(host: Optional[str] = None, port=None):
+    """解析 WebSocket 监听地址。
+
+    优先级：显式参数 > 环境变量（WS_HOST / WS_PORT）> 默认值
+    （0.0.0.0:8765）。端口非法时抛 ``ValueError``，避免带着错误配置静默监听。
+    """
+    resolved_host = host if host is not None else os.getenv("WS_HOST", DEFAULT_WS_HOST)
+    resolved_host = (resolved_host or "").strip() or DEFAULT_WS_HOST
+
+    raw_port = port if port is not None else os.getenv("WS_PORT", str(DEFAULT_WS_PORT))
+    try:
+        resolved_port = int(raw_port)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"WS_PORT 必须是 1-65535 的整数，当前值: {raw_port!r}"
+        ) from exc
+    if not 1 <= resolved_port <= 65535:
+        raise ValueError(f"WS_PORT 必须是 1-65535 的整数，当前值: {resolved_port!r}")
+    return resolved_host, resolved_port
+
 
 class WebSocketManager:
     """WebSocket连接管理器（表现层）"""
@@ -21,6 +48,8 @@ class WebSocketManager:
         self.connected_clients: Set[WebSocketServerProtocol] = set()
         self.user_websocket_map: Dict[str, WebSocketServerProtocol] = {}
         self.websocket_service = WebSocketService()
+        # 防止重复调用 run_websocket_server 时叠加 server/后台任务
+        self._server_running = False
 
     async def register(self, websocket: WebSocketServerProtocol, username: str = None) -> None:
         """注册WebSocket连接"""
@@ -217,25 +246,34 @@ class WebSocketManager:
                 log_exception(e, "离线用户检测任务异常")
 
     async def run_websocket_server(self) -> None:
-        """运行WebSocket服务器"""
+        """运行 WebSocket 服务器（监听地址可用 WS_HOST/WS_PORT 配置）。
+
+        后台任务（定时推送/离线检测）的唯一启动点是 ``main.py``；本方法只负责
+        WebSocket server。重复调用时通过 ``_server_running`` 直接返回，避免叠加
+        server 或后台任务。
+        """
+        if self._server_running:
+            logger.warning("WebSocket 服务器已在运行，忽略重复启动")
+            return
+
+        host, port = get_ws_bind_address()
+        self._server_running = True
         try:
             async with websockets.serve(
                     self.handle_client,
-                    "localhost",
-                    8765,
+                    host,
+                    port,
                     ping_interval=20,
                     ping_timeout=10
             ):
-                logger.info("WebSocket 服务启动: ws://localhost:8765")
-
-                # 启动后台任务
-                asyncio.create_task(self.data_pusher())
-                asyncio.create_task(self.inactive_user_checker())
+                logger.info(f"WebSocket 服务启动: ws://{host}:{port}")
 
                 await asyncio.Future()  # 运行直到被取消
         except Exception as e:
             log_exception(e, "WebSocket服务器启动失败")
             raise
+        finally:
+            self._server_running = False
 
 
 # 全局WebSocket管理器实例

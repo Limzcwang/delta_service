@@ -116,6 +116,27 @@ async def create_user(request: CreateUserRequest):
     }
 
 
+@router.get("/list", summary="获取用户列表")
+async def list_users(skip: int = 0, limit: int = 100):
+    """获取用户列表"""
+    result = await UserService.list_users(skip, limit)
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_client_error_message(result.get("message"), "获取用户列表失败")
+        )
+
+    return {
+        "code": 200,
+        "message": result["message"],
+        "data": {
+            "users": [_public_user(user) for user in result["users"]],
+            "total": result["total"]
+        }
+    }
+
+
 @router.get("/{user_id}", summary="根据ID获取用户信息")
 async def get_user_by_id(user_id: int):
     """根据用户ID获取用户信息"""
@@ -218,25 +239,4 @@ async def login(request: LoginRequest):
         "code": 200,
         "message": result["message"],
         "data": _public_user(result["user"])
-    }
-
-
-@router.get("/list", summary="获取用户列表")
-async def list_users(skip: int = 0, limit: int = 100):
-    """获取用户列表"""
-    result = await UserService.list_users(skip, limit)
-
-    if not result["success"]:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_client_error_message(result.get("message"), "获取用户列表失败")
-        )
-
-    return {
-        "code": 200,
-        "message": result["message"],
-        "data": {
-            "users": [_public_user(user) for user in result["users"]],
-            "total": result["total"]
-        }
     }

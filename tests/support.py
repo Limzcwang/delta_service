@@ -127,27 +127,38 @@ def install_tortoise_stub():
 
 
 class _StubRouter:
-    """APIRouter 的最小替身：装饰器原样返回处理函数。"""
+    """APIRouter 的最小替身：记录 (method, path, func) 便于测试路由注册顺序。"""
 
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+        self.prefix = kwargs.get("prefix", "")
+        self.routes = []
 
     def post(self, *args, **kwargs):
-        return self._decorator
+        return self._register("POST", args, kwargs)
 
     def get(self, *args, **kwargs):
-        return self._decorator
+        return self._register("GET", args, kwargs)
 
     def put(self, *args, **kwargs):
-        return self._decorator
+        return self._register("PUT", args, kwargs)
 
     def delete(self, *args, **kwargs):
-        return self._decorator
+        return self._register("DELETE", args, kwargs)
 
-    @staticmethod
-    def _decorator(func):
-        return func
+    def _register(self, method, args, kwargs):
+        path = args[0] if args else kwargs.get("path", "")
+
+        def decorator(func):
+            self.routes.append((method, path, func))
+            return func
+
+        return decorator
+
+    def full_paths(self):
+        """返回与注册顺序一致的完整路径列表（仅供路由顺序测试使用）。"""
+        return [(method, f"{self.prefix}{path}") for method, path, _ in self.routes]
 
 
 class StubHTTPException(Exception):
