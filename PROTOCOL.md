@@ -136,8 +136,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ### 2.3 令牌使用
 
 - 所有 `/api/v1/**` 业务接口除 `auth/login` 外都要求有效 token；
-- WebSocket 连接后**第一条业务消息必须是 `auth`**（§6.2），否则除 `ping` 外的消息一律回 `AUTH_REQUIRED`；
-- 令牌过期：HTTP 返回 `401 + 40101`；WS 返回 `auth_error/TOKEN_EXPIRED` 后可关闭连接（关闭码建议 4001）。
+- WebSocket 连接后**第一条业务消息必须是 `auth`**（§6.2）；未认证前除 `auth` 外的任何消息（含 `ping`）一律回 `error`，`code=NOT_AUTHENTICATED`，连接保持、可继续认证；
+- 令牌过期：HTTP 返回 `401 + 40101`；WS 回 `auth_error/AUTH_EXPIRED` 后关闭连接（关闭码建议 4001）。
 
 ---
 
