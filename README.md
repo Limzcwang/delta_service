@@ -447,7 +447,7 @@ python -m unittest discover -s tests -v
 
 ## 10. 部署与安全
 
-生产 HTTPS：**https://deltachat.icu:8443**（Caddy 在宿主机终结 TLS，反代容器 `127.0.0.1:8000`）。容器必须设置 `FORWARDED_ALLOW_IPS=172.17.0.1` 并信任 `X-Forwarded-For`，否则登录限流会把所有用户当成同一来源；CI 的 deploy.yml 与手动 `docker run` 均已带该 env。部署后验证：`curl -fsS https://deltachat.icu:8443/health`，并确认登录日志来源 IP 为真实公网 IP（非 `172.17.0.1`）。
+生产 HTTPS：**https://deltachat.icu:8443**（Caddy 在宿主机终结 TLS，反代容器 `127.0.0.1:8000`；Caddy 配置 `/etc/caddy/Caddyfile`，systemd 服务 `delta-tls.service`）。证书为腾讯云**静态证书（1 年有效，非自动续期）**，到期前重新下载替换 `/etc/delta-tls/` 下文件并 `systemctl restart delta-tls`。容器必须设置 `FORWARDED_ALLOW_IPS=172.17.0.1` 并信任 `X-Forwarded-For`，否则登录限流会把所有用户当成同一来源；CI 的 deploy.yml 与手动 `docker run` 均已带该 env。部署后验证：`curl -fsS https://deltachat.icu:8443/health`，并确认登录日志来源 IP 为真实公网 IP（非 `172.17.0.1`）。
 
 - 部署流程、self-hosted runner 升级、手动兜底、回滚与排障：[DEPLOYMENT.md](DEPLOYMENT.md)。
 - 口令哈希、日志脱敏、Secret Scanning/gitleaks、历史清理状态、漏洞上报：[SECURITY.md](SECURITY.md)。

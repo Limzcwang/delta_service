@@ -123,7 +123,22 @@ sudo stat -c '%U:%G %a' /etc/delta-service/db.env   # 期望 root:runneruser 640
 
 生产通过宿主机 **Caddy** 终结 TLS 并反代到容器 `127.0.0.1:8000`：
 
-- 对外地址：**https://deltachat.icu:8443**（证书由腾讯云签发，Caddy 自动续期）
+- 对外地址：**https://deltachat.icu:8443**
+- 证书/私钥（腾讯云**静态证书**，非 acme 自动续期）：
+  - `/etc/delta-tls/deltachat.icu_bundle.crt`（权限 `644`）
+  - `/etc/delta-tls/deltachat.icu.key`（权限 `600`）
+- Caddy：`/usr/local/bin/caddy`（v2.10.2），配置 `/etc/caddy/Caddyfile`，
+  systemd 服务名 **`delta-tls.service`**（`systemctl enable --now delta-tls`）。
+- 监听 **8443 TLS** → `reverse_proxy 127.0.0.1:8000`，Caddyfile 片段：
+
+```caddyfile
+https://deltachat.icu:8443 {
+    tls /etc/delta-tls/deltachat.icu_bundle.crt /etc/delta-tls/deltachat.icu.key
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+- 安全组需放行：**22**（SSH）、**8000**（容器/本机反代源）、**8443**（HTTPS）。
 - Caddy 在宿主机、经 docker 网桥访问容器，容器看到的来源 IP 是 `172.17.0.1`；
   必须信任该反代并读取 `X-Forwarded-For`，否则登录限流会把所有用户当成同一 IP。
 - CI 与手动部署的 `docker run` 都必须带：
@@ -131,6 +146,30 @@ sudo stat -c '%U:%G %a' /etc/delta-service/db.env   # 期望 root:runneruser 640
 - `main.py` 的 uvicorn 显式设置 `proxy_headers=True` +
   `forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1")`，
   不依赖隐式默认。
+
+**证书续期（静态证书，1 年有效）**：到期前在腾讯云重新下载证书，替换
+`/etc/delta-tls/` 下的 `deltachat.icu_bundle.crt` 与 `deltachat.icu.key`，
+然后 `systemctl restart delta-tls`。若后续接入 DNSPod API Token，可改为
+acme.sh 自动续期。
+
+**部署后验证**：
+
+```bash
+# 1) HTTPS 健康检查（-I 只看响应头）
+curl -sI https://deltachat.icu:8443/health
+
+# 2) 触发登录后看容器日志：client_ip 应为真实公网 IP，而不是 172.17.0.1
+docker logs --since 5m delta-service-container 2>&1 | grep -i login | tail -20
+
+# 3) 同一来源 IP 连续第 6 次登录应返回 429（登录限流 5 次/分/IP）
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+    https://deltachat.icu:8443/api/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"nonexistent","password":"wrong"}'
+done
+# 前 5 次 401，第 6 次 429 即正确
+```
 
 > 若 Caddy 与容器不在同一 docker 网络/网段，按实际网关 IP 调整
 > `FORWARDED_ALLOW_IPS`（可用 `docker network inspect bridge` 查看 Gateway）。
