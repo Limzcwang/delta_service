@@ -47,6 +47,8 @@ class FakeMessageDao:
         self.list_result = []
         self.deleted_cutoff = None
         self.deleted_count = 0
+        self.has_older = False
+        self.older_cutoff = None
 
     async def create(self, **kwargs):
         self.created.append(kwargs)
@@ -68,6 +70,10 @@ class FakeMessageDao:
         self.list_args = (room_id, before, limit)
         self.since_arg = since
         return list(self.list_result)
+
+    async def has_older_than(self, room_id, cutoff):
+        self.older_cutoff = cutoff
+        return self.has_older
 
     async def delete_older_than(self, cutoff):
         self.deleted_cutoff = cutoff
@@ -170,6 +176,18 @@ class ListMessagesTests(MessageServiceTestCase):
         self.assertEqual(["m0", "m1"], [item["id"] for item in page["items"]])
         self.assertEqual("m1", page["next_before"])
         self.assertEqual((room.id, None, 2), self.dao.list_args)
+        self.assertEqual(7, page["window_days"])
+        self.assertFalse(page["truncated"])
+
+    def test_window_fields_and_truncated(self):
+        self.dao.list_result = [make_message("m1")]
+        self.dao.has_older = True
+        page = self.await_(
+            messages_service.list_messages(make_room(), limit=10)
+        )
+        self.assertEqual(7, page["window_days"])
+        self.assertTrue(page["truncated"])
+        self.assertIsNotNone(self.dao.older_cutoff)
 
     def test_cursor_is_resolved_and_forwarded(self):
         room = make_room()
@@ -205,7 +223,14 @@ class ListMessagesTests(MessageServiceTestCase):
     def test_empty_history(self):
         page = self.await_(messages_service.list_messages(make_room()))
         self.assertEqual(
-            {"items": [], "has_more": False, "next_before": None}, page
+            {
+                "items": [],
+                "has_more": False,
+                "next_before": None,
+                "window_days": 7,
+                "truncated": False,
+            },
+            page,
         )
 
 

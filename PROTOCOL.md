@@ -86,7 +86,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - 消息历史：请求 `?limit=<1..100，默认 50>&before=<上一页最后一条消息 id>`；`before` 是**消息 id 字符串**（不是时间戳）。
 - 消息历史响应：`data: {"items": [...], "next_before": <消息 id 字符串|null>, "has_more": true|false}`；用户列表沿用 `{"users":[],"total":N}`。
 - 消息历史排序：按 `created_at` **倒序（新→旧）**；消息/房间响应中的 `created_at` 为 Unix 毫秒整数。
-- **历史窗口（F4）**：按成员 `joined_at` 计算；入房未满 7 天只能看最近 7 天，满 7 天可看最近 30 天；超出窗口的 `before` 游标 → `400 INVALID_PAGINATION`（物理清理仍 30 天）。
+- **历史窗口（F4）**：按成员 `joined_at` 计算；入房未满 7 天只能看最近 7 天，满 7 天可看最近 30 天；超出窗口的 `before` 游标 → `400 INVALID_PAGINATION`（物理清理仍 30 天）。响应 `window_days` 表示本次窗口天数（7/30），`truncated=true` 表示房间仍有早于窗口下界的历史（客户端据此显示「仅显示最近 N 天」）。
 - 用户列表分页沿用 `?skip=<int>&limit=<int>`。
 
 ---
@@ -145,7 +145,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - `users` 新增 `nickname`（VARCHAR(32)，非空）；老账号由 `scripts/migrate_f.py` 回填为原 `username`，新用户默认等于 `username`。
 - **username 仅本人可见**：登录/注册/`GET /users/me` 可返回自己的 `username`；房间成员、chat_message.user、user_joined/user_left、房主信息等所有他人可见接口/事件只返回 `nickname`。
 - 新注册用户名：**6–20 位 `[A-Za-z0-9]`，至少一个字母，大小写敏感**；老账号登录不受影响。
-- 昵称：`PATCH /api/v1/users/me {nickname}`，1–20 字符，去首尾空白/控制字符，不要求唯一；后续展示实时取 nickname。
+- 昵称：`PATCH /api/v1/users/me {nickname}`，1–20 字符，去首尾空白/控制字符，不要求唯一；后续展示实时取 nickname。**已连接的 WS 会话在发送/成员事件前从 DB 刷新用户**，改昵称后无需重连，下一条 `chat_message` 与 `user_joined/user_left` 即使用新昵称（成员列表/房间详情同样实时）。
 - 新注册密码：**8–64 字符**（与改密一致）；6–7 位拒绝 `INVALID_NEW_PASSWORD`；老账号登录不受影响。
 - 改密码：`POST /api/v1/users/me/password {old_password,new_password}`；旧密码错 `WRONG_OLD_PASSWORD`；新密码 8–64；成功不吊销已签发 token。
 
@@ -192,7 +192,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主软删除房间 | – | `{deleted:true}` |
 | POST | `/api/v1/rooms/{room_id_or_code}/join` | 加入房间 | `{password?}` | `{room,members}` |
 | POST | `/api/v1/rooms/{room_id_or_code}/leave` | 离开房间 | – | `{left:true}` |
-| GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C） | `?before&limit` | `{items:[ChatMessage],has_more,next_before}` |
+| GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C，窗口 7/30 天） | `?before&limit` | `{items:[ChatMessage],has_more,next_before,window_days,truncated}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D，DB ∪ 内存增量） | – | `{strokes:[CanvasOp],rev,updated_at}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
 
@@ -453,7 +453,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 单用户单连接 | 新连接认证成功时关闭旧连接（close code 4000），旧连接退出房间并广播 `user_left(reason=replaced)` |
 | 已支持消息 | `auth`、`join_room`、`leave_room`、`chat_send`、`canvas_op`、`canvas_snapshot_save`、`ping`；`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（E 实现） |
 | chat_send | 需已进房；限频 5 条/秒/用户（超限 `RATE_LIMITED`）；空/超长（>2000）`INVALID_MESSAGE`；非成员 `NOT_ROOM_MEMBER`；成功后广播 `chat_message` 给房间内所有连接（含发送者），`client_msg_id` 原样回传 |
-| 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id（字符串），`limit` 默认 50/上限 100；需 JWT + 房间成员 |
+| 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id（字符串），`limit` 默认 50/上限 100；需 JWT + 房间成员；响应额外含 `window_days`（7/30，按 joined_at）与 `truncated`（是否有早于窗口的历史被截断） |
 | HTTP leave/kick | 成功后服务端摘除该用户在当前房间的 WS 会话（不再收 `chat_message`，在线状态消失），并向余下成员广播 `user_left(reason=left\|kicked)` |
 | HTTP close | 服务端摘除该房间**全部在线成员**的 WS 会话并广播 `user_left(reason=closed)`；之后这些连接发 `chat_send`/`canvas_op` 返回 `NOT_ROOM_MEMBER`（会话已不在房间） |
 | join_room | 要求已认证 + 已是房间成员（HTTP join 过）；非成员 `NOT_ROOM_MEMBER`；房间不存在 `ROOM_NOT_FOUND`；已关闭 `ROOM_CLOSED`；成功回 `room_joined{room,members}`（members 含 `online`） |

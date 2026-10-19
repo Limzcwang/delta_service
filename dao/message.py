@@ -61,6 +61,13 @@ class MessageDao:
         )
 
     @staticmethod
+    async def has_older_than(room_id: str, cutoff: datetime) -> bool:
+        """窗口截断判断：房间是否存在早于 cutoff 的消息。"""
+        return await RoomMessage.filter(
+            room_id=room_id, created_at__lt=cutoff
+        ).exists()
+
+    @staticmethod
     async def delete_older_than(cutoff: datetime) -> int:
         deleted = await RoomMessage.filter(created_at__lt=cutoff).delete()
         return int(deleted or 0)
