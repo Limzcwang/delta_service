@@ -30,10 +30,10 @@
 |---|---|---|
 | HTTP Base | `http://<host>:8000` | `https://<host>`（TLS 由反向代理终结） |
 | HTTP 路径前缀 | `/api`（无版本） | `/api/v1`（旧 `/api` 过渡期保留，下线时间见开放问题） |
-| WebSocket URL | `ws://<host>:8765` | `wss://<host>/ws`（反代转发到后端 8765） |
-| WebSocket 监听 | `WS_HOST`（默认 `0.0.0.0`）+ `WS_PORT`（默认 `8765`） | 同左 |
+| WebSocket URL | **`ws://<host>:8000/ws`**（B2b 起与 HTTP 同端口，FastAPI `/ws`） | `wss://<host>/ws`（反代只需代理 8000 一个上游） |
+| WebSocket 监听 | 与 HTTP 共用 uvicorn 8000；旧独立 8765 仅 `LEGACY_WS_ENABLED=true` 时启动（默认 false） | 同左 |
 
-> **安全提醒**：服务默认监听 `0.0.0.0`（为让容器 `-p 8765:8765` 生效）。部署时必须用云安全组/防火墙限制来源，并在生产用反向代理终结 TLS 与鉴权；**不要**把 8765 裸露到公网。
+> **安全提醒**：B2b 起 WebSocket 与 HTTP 共用 8000（`/ws`），业务只需开放 8000 一个端口并在生产用反向代理终结 TLS；旧 8765 server 默认关闭，不应再对公网开放。
 
 ### 1.2 时间与编码
 
@@ -258,10 +258,10 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 ### 6.1 连接
 
-- URL（目标）：`wss://<host>/ws`；A 现状：`ws://<host>:8765`。
+- URL：`ws://<host>:8000/ws`（B2b 现状，与 HTTP 同端口）；生产目标 `wss://<host>/ws`（反代同一 8000 上游）。旧独立 `ws://<host>:8765` 仅在 `LEGACY_WS_ENABLED=true` 时存在，默认关闭。
 - 所有消息为 JSON 文本，单条 ≤ 64KB（超限 `INVALID_PAYLOAD` 并断开）。
 - 心跳：目标为服务端每 **15s** 下发 `heartbeat`，客户端 45s 未收到心跳可重连；客户端也可主动 `ping`。
-  （A 现状：服务端心跳 30s、另有 15s 模拟数据推送；B 起统一为心跳/业务消息，不再推送演示数据。）
+  （B2b 现状：服务端心跳保持 30s；15s 模拟数据推送仍由旧 manager 的 data_pusher 任务运行，但只对旧 8765 连接生效，`/ws` 客户端不会收到 `push`。目标 15s 心跳待后续统一。）
 - 客户端应实现指数退避重连（1s/2s/4s…上限 30s），重连后重新 `auth` 并重新 `join_room`。
 
 ### 6.2 首消息认证（B）
@@ -291,25 +291,27 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 失败：
 
 ```json
-{"type": "auth_error", "code": "TOKEN_EXPIRED", "message": "登录已过期，请重新登录"}
+{"type": "auth_error", "code": "AUTH_EXPIRED", "error_code": "AUTH_EXPIRED", "message": "登录已过期，请重新登录"}
 ```
 
-> A 现状的 `{"type":"authenticate","username":...}`（仅校验在线状态）是**过渡协议**，B 起默认禁用；仅当 `LEGACY_WS_AUTH=1` 时保留一个版本。
+> A 现状的 `{"type":"authenticate","username":...}`（仅校验在线状态）**已在 B2b 移除**：收到该 type 会返回 `auth_error`（`AUTH_INVALID`，提示认证协议已升级）并关闭连接（close code 4001）；客户端必须改用 `auth + token`。
 
 ### 6.3 客户端 → 服务端
 
 | type | 说明 | 是否需认证 | 示例 |
 |---|---|---|---|
 | `join_room` | 加入房间 | 是 | 见下 |
-| `leave_room` | 离开房间 | 是 | `{"type":"leave_room","room_id":"01J8Z9K3Q7"}` |
+| `leave_room` | 离开房间 | 是 | `{"type":"leave_room"}`（B2b 忽略房间参数，退出当前频道） |
 | `chat_send` | 发聊天消息（C） | 是 | 见下 |
 | `canvas_op` | 画板操作（D） | 是 | 见下 |
 | `skill_report` | 上报技能快照（E） | 是 | 见下 |
 | `ping` | 心跳 | 否 | `{"type":"ping","ts":1750000000000}` |
 
 ```json
-{"type":"join_room","room_code":"A1B2C","password":"room-pass","request_id":"c-123"}
+{"type":"join_room","room_id_or_code":"A1B2C","request_id":"c-123"}
 ```
+
+> `room_id_or_code` 同时接受 5 位 room_code 与内部 id，兼容旧字段 `room_code`；B2b 要求用户已通过 HTTP join 成为成员，`password` 字段忽略（HTTP 已校验）。
 ```json
 {"type":"chat_send","client_msg_id":"m-001","content":"大家好","content_type":"text"}
 ```
@@ -408,6 +410,26 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - 重连后状态以 `room_joined` 的 `canvas_snapshot` + `skill_state` 为准，不依赖增量补齐。
 
 ---
+
+### 6.6 B2b 当前实现状态（客户端必读）
+
+B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与上文目标契约的差异会在 C/D/E 补齐：
+
+| 项 | 当前实现 |
+|---|---|
+| 连接路径 | `ws://<host>:8000/ws`（FastAPI 路由，与 HTTP 同端口）；旧 8765 默认关闭 |
+| 首消息 | 必须是 `auth`；`auth_ok` 含 `user`、`server_time`、`heartbeat_interval_ms`；失败 `auth_error` 后关闭（code 4001） |
+| 旧 `authenticate` | **已移除**：返回 `auth_error`（`AUTH_INVALID`）并关闭 |
+| 未认证消息 | `error`，`code=NOT_AUTHENTICATED`，连接保持（可继续尝试 auth） |
+| 单用户单连接 | 新连接认证成功时关闭旧连接（close code 4000），旧连接退出房间并广播 `user_left(reason=replaced)` |
+| 已支持消息 | `auth`、`join_room`、`leave_room`、`ping`；`chat_send`/`canvas_op`/`skill_report`/旧 `room_message` 等返回 `UNSUPPORTED_MESSAGE_TYPE`（C/D/E 实现） |
+| join_room | 要求已认证 + 已是房间成员（HTTP join 过）；非成员 `NOT_ROOM_MEMBER`；房间不存在 `ROOM_NOT_FOUND`；已关闭 `ROOM_CLOSED`；成功回 `room_joined{room,members}`（members 含 `online`） |
+| 离开/断线 | `leave_room` 回 `left_room` 并向房间其他成员广播 `user_left(reason=left)`；断开自动清理并广播 `user_left(reason=disconnected)` |
+| 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
+| 心跳 | 保持原有 30s 服务端 `heartbeat` 与 `ping→pong`（§6.1 目标的 15s 待统一） |
+| 错误格式 | `{"type":"error","code":"...","error_code":"...","message":"..."}`：`code` 为新协议字段，`error_code` 为旧字段兼容（同值） |
+| 房间事件 | `user_joined` / `user_left` 载荷：`room_id`、`room_code`、`user{id,username}`、`ts`（ms）、可选 `reason` |
+| 画板/技能 | 当前 `room_joined` **不包含** `canvas_snapshot` / `skill_state`（D/E 阶段加入） |
 
 ## 7. 错误码与状态码
 
@@ -547,7 +569,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | 认证 | 无 HTTP 鉴权；WS 仅校验用户名是否在内存在线表 | JWT（B） |
 | 响应包 | 房间裸 JSON/`error_code`；用户 `code/message/data`；全局 500 `code/request_id` | 统一 `{code,message,data,request_id?}`（B/C 迁移） |
 | 房间 | 内存 `ROOM_MANAGER`、无名称/密码/落库；5 位码 `[A-Z0-9]` | 落库房间模型 + 私有密码（B） |
-| WS 监听 | `WS_HOST` 默认 `0.0.0.0`，`WS_PORT` 默认 8765（本轮已修） | 同左 + 反代/TLS |
+| WS 监听 | FastAPI `/ws` 与 HTTP 共用 8000；旧 8765 默认关闭（`LEGACY_WS_ENABLED=false`） | 同左 + 反代/TLS |
 | WS 消息 | `authenticate/join_room/leave_room/room_message/echo/broadcast/ping/activity` | `auth/join_room/leave_room/chat_send/canvas_op/skill_report/ping` |
 | 画板 | 无 | D 阶段实现 |
 | 技能 | 无 | E 阶段实现 |
