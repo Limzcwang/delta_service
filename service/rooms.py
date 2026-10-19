@@ -236,18 +236,39 @@ async def list_my_rooms(
         raise RoomError("INVALID_PAGINATION", "page 非法")
     before_dt = _ms_to_datetime(before)
 
-    memberships = await RoomMemberDao.list_for_user(
-        getattr(user, "id", None), limit, before_dt, offset
-    )
-    memberships = [
-        member
-        for member in memberships
-        if getattr(member, "room", None) is not None
-        and getattr(member.room, "closed_at", None) is None
-        and not getattr(member.room, "deleted", False)
-    ]
-    has_more = len(memberships) > limit
-    page = memberships[:limit]
+    def _is_valid(member) -> bool:
+        room = getattr(member, "room", None)
+        return (
+            room is not None
+            and getattr(room, "closed_at", None) is None
+            and not getattr(room, "deleted", False)
+        )
+
+    # SQL 已过滤未关闭/未删除；这里再循环补取，保证过滤后仍按有效房间取满
+    # limit+1 条（避免无效房占位导致 has_more/next_before 错误）。
+    collected = []
+    cursor_dt = before_dt
+    offset_current = offset
+    for _attempt in range(1000):
+        batch = await RoomMemberDao.list_for_user(
+            getattr(user, "id", None), limit, cursor_dt, offset_current
+        )
+        for member in batch:
+            if _is_valid(member):
+                collected.append(member)
+            if len(collected) >= limit + 1:
+                break
+        if len(collected) >= limit + 1:
+            break
+        if len(batch) <= limit:
+            break
+        cursor_dt = getattr(batch[-1], "joined_at", None)
+        offset_current = 0
+        if cursor_dt is None:
+            break
+
+    has_more = len(collected) > limit
+    page = collected[:limit]
     items = []
     for member in page:
         items.append(

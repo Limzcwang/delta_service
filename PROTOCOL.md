@@ -197,7 +197,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D，DB ∪ 内存增量） | – | `{strokes:[CanvasOp],rev,updated_at}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
 
-`MyRoom`（`GET /api/v1/rooms/mine` 每项）= 现有房间公开字段 + `joined_at`（Unix 毫秒）+ `role`（`owner|member`），**不含 password_hash**。该接口需 JWT；只返回当前用户已加入、未关闭未删除的房间（公开/私有均含，私有房已是成员故无需密码）。按 `room_members.joined_at` 倒序；游标 `before` 为上一页最后一项的 `joined_at` 毫秒（同毫秒并列极少，按 joined_at 游标）；`next_before` 同类型；`page/page_size` 为客户端兼容参数（无 `before` 时按 page 偏移，有 before 时以游标为准）。`/rooms/mine` 必须声明在 `/rooms/{room_id_or_code}` 之前。
+`MyRoom`（`GET /api/v1/rooms/mine` 每项）= 现有房间公开字段 + `joined_at`（Unix 毫秒）+ `role`（`owner|member`），**不含 password_hash**。该接口需 JWT；只返回当前用户已加入、未关闭未删除的房间（公开/私有均含，私有房已是成员故无需密码）。**未关闭/未删除过滤在 SQL 层完成后再分页**（无效房不占 limit 名额），按 `room_members.joined_at` 倒序；游标 `before` 为上一页最后一项的 `joined_at` 毫秒（同毫秒并列极少，按 joined_at 游标）；`next_before` 同类型；`page/page_size` 为客户端兼容参数（无 `before` 时按 page 偏移，有 before 时以游标为准）。`/rooms/mine` 必须声明在 `/rooms/{room_id_or_code}` 之前。
 
 `RoomSummary`（公共列表字段，产品要求）：
 
