@@ -88,7 +88,10 @@ class AuthSuccessTests(WsAuthTestCase):
         get_user.assert_awaited_once_with(7)
         response = self.websocket.last()
         self.assertEqual("auth_ok", response["type"])
-        self.assertEqual({"id": "7", "username": "bob"}, response["user"])
+        self.assertEqual(
+            {"id": "7", "username": "bob", "nickname": "bob"},
+            response["user"],
+        )
         self.assertIs(self.session, self.manager.sessions["7"])
         self.assertTrue(self.session.authenticated)
         self.assertEqual("bob", self.session.user.username)

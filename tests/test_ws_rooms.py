@@ -67,7 +67,7 @@ class JoinRoomTests(WsRoomTestCase):
         await self.join_alice()
         events = self.bob_ws.messages("user_joined")
         self.assertEqual(1, len(events))
-        self.assertEqual({"id": "1", "username": "alice"}, events[0]["user"])
+        self.assertEqual({"id": "1", "nickname": "alice"}, events[0]["user"])
         self.assertEqual(self.room.id, events[0]["room_id"])
         self.assertEqual([], self.alice_ws.messages("user_joined"))
 

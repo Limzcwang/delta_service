@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Request
@@ -50,8 +51,26 @@ class RegisterRequest(BaseModel):
     password: str
 
 
-_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,50}$")
+class UpdateMeRequest(BaseModel):
+    """v1 修改昵称请求。"""
+
+    nickname: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """v1 修改密码请求。"""
+
+    old_password: str
+    new_password: str
+
+
+# F1：新注册用户名 6–20 位字母/数字，且至少一个字母；大小写敏感；老账号不受影响。
+_USERNAME_RE = re.compile(r"^(?=.*[A-Za-z])[A-Za-z0-9]{6,20}$")
 _PASSWORD_MIN_LENGTH = 6
+NICKNAME_MIN_LENGTH = 1
+NICKNAME_MAX_LENGTH = 20
+NEW_PASSWORD_MIN_LENGTH = 8
+NEW_PASSWORD_MAX_LENGTH = 64
 
 
 def _token_response(user: Any, request: Any = None) -> Dict[str, Any]:
@@ -75,14 +94,63 @@ def _token_response(user: Any, request: Any = None) -> Dict[str, Any]:
 
 
 def _user_summary(user: Any) -> Dict[str, Any]:
-    """把用户对象/字典收敛为对外字段（不含 password）。"""
+    """当前登录用户本人的概要（可含自己的 username；不含 password）。"""
     if isinstance(user, dict):
         user_id = user.get("id")
         username = user.get("username")
+        nickname = user.get("nickname")
     else:
         user_id = getattr(user, "id", None)
         username = getattr(user, "username", None)
-    return {"id": str(user_id), "username": username}
+        nickname = getattr(user, "nickname", None)
+    return {
+        "id": str(user_id),
+        "username": username,
+        "nickname": nickname if nickname is not None else username,
+    }
+
+
+def _validate_username(username: str) -> str:
+    username = (username or "").strip()
+    if not _USERNAME_RE.fullmatch(username):
+        raise APIError(
+            400,
+            CODE_BAD_REQUEST,
+            "用户名需为 6-20 位字母或数字，且至少包含一个字母",
+            error_code="INVALID_USERNAME",
+        )
+    return username
+
+
+def _validate_nickname(nickname: Any) -> str:
+    if not isinstance(nickname, str):
+        raise APIError(
+            400, CODE_BAD_REQUEST, "昵称必须是字符串", error_code="INVALID_NICKNAME"
+        )
+    # 去掉控制字符（Unicode C* 类）后去首尾空白
+    cleaned = "".join(ch for ch in nickname if unicodedata.category(ch)[0] != "C")
+    cleaned = cleaned.strip()
+    if not NICKNAME_MIN_LENGTH <= len(cleaned) <= NICKNAME_MAX_LENGTH:
+        raise APIError(
+            400,
+            CODE_BAD_REQUEST,
+            f"昵称长度需在 {NICKNAME_MIN_LENGTH}-{NICKNAME_MAX_LENGTH} 个字符之间",
+            error_code="INVALID_NICKNAME",
+        )
+    return cleaned
+
+
+def _validate_new_password(password: Any) -> str:
+    if not isinstance(password, str) or not (
+        NEW_PASSWORD_MIN_LENGTH <= len(password) <= NEW_PASSWORD_MAX_LENGTH
+    ):
+        raise APIError(
+            400,
+            CODE_BAD_REQUEST,
+            f"新密码长度需在 {NEW_PASSWORD_MIN_LENGTH}-{NEW_PASSWORD_MAX_LENGTH} 个字符之间",
+            error_code="INVALID_NEW_PASSWORD",
+        )
+    return password
 
 
 @router.post("/auth/login", summary="登录并签发 JWT")
@@ -116,14 +184,8 @@ async def login(request: Request, payload: LoginRequest):
 @router.post("/auth/register", summary="注册并签发 JWT")
 async def register(request: Request, payload: RegisterRequest):
     """创建用户并直接返回与登录一致的 token 响应。"""
-    username = (payload.username or "").strip()
+    username = _validate_username(payload.username or "")
     password = payload.password or ""
-    if not _USERNAME_RE.fullmatch(username):
-        raise APIError(
-            400,
-            CODE_BAD_REQUEST,
-            "用户名需为 3-50 位字母、数字或下划线",
-        )
     if len(password) < _PASSWORD_MIN_LENGTH:
         raise APIError(
             400,
@@ -149,7 +211,46 @@ async def get_me(request: Request, user=Depends(get_current_user)):
         {
             "id": str(getattr(user, "id", "")),
             "username": getattr(user, "username", ""),
+            "nickname": getattr(user, "nickname", None)
+            or getattr(user, "username", ""),
             "created_at": created_at_ms,
         },
         request=request,
     )
+
+
+@router.patch("/users/me", summary="修改我的昵称")
+async def update_me(
+    request: Request,
+    payload: UpdateMeRequest,
+    user=Depends(get_current_user),
+):
+    """F1.4：昵称 1–20 字符，去首尾空白/控制字符，不要求唯一。"""
+    nickname = _validate_nickname(payload.nickname)
+    result = await UserService.update_nickname(getattr(user, "id"), nickname)
+    if not result.get("success"):
+        raise APIError(404, CODE_BAD_REQUEST, "用户不存在")
+    return ok({"user": _user_summary(result.get("user") or {})}, request=request)
+
+
+@router.post("/users/me/password", summary="修改我的密码")
+async def change_my_password(
+    request: Request,
+    payload: ChangePasswordRequest,
+    user=Depends(get_current_user),
+):
+    """F1.5：旧密码校验；新密码 8–64；成功不强制下线已有 token。"""
+    new_password = _validate_new_password(payload.new_password)
+    result = await UserService.change_password(
+        getattr(user, "id"), payload.old_password or "", new_password
+    )
+    if not result.get("success"):
+        if result.get("error_code") == "WRONG_OLD_PASSWORD":
+            raise APIError(
+                400,
+                CODE_BAD_REQUEST,
+                "旧密码错误",
+                error_code="WRONG_OLD_PASSWORD",
+            )
+        raise APIError(404, CODE_BAD_REQUEST, "用户不存在")
+    return ok({"changed": True}, request=request)

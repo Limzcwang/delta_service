@@ -90,7 +90,10 @@ class ApiWsEndpointTests(ApiWsTestCase):
 
         self.assertTrue(fake_ws.accepted)
         auth_ok = fake_ws.messages("auth_ok")[0]
-        self.assertEqual({"id": "1", "username": "alice"}, auth_ok["user"])
+        self.assertEqual(
+            {"id": "1", "username": "alice", "nickname": "alice"},
+            auth_ok["user"],
+        )
         self.assertEqual({}, self.manager.sessions)  # finally 已清理
 
     async def test_bad_auth_closes_connection(self):
@@ -105,7 +108,7 @@ class ApiWsEndpointTests(ApiWsTestCase):
         user = make_user()
         token, _ = tokens.create_access_token(user.id)
         room = make_room()
-        members = [{"id": "1", "username": "alice", "role": "owner"}]
+        members = [{"id": "1", "nickname": "alice", "role": "owner"}]
         fake_ws = FakeFastAPIWebSocket([
             json.dumps({"type": "auth", "token": token}),
             json.dumps({"type": "join_room", "room_id_or_code": room.code}),

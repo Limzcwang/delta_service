@@ -32,7 +32,8 @@ def _client_error_message(message: Optional[str], fallback: str) -> str:
 
 
 # 对外用户字段白名单：即使服务层/模型将来多返回字段，API 也不会把 password 带出去。
-_PUBLIC_USER_FIELDS = ("id", "username", "created_at", "updated_at")
+# F1：对外只暴露 nickname；username 仅本人可见（legacy 接口也遵守）。
+_PUBLIC_USER_FIELDS = ("id", "nickname", "created_at", "updated_at")
 
 
 def _public_user(user):
@@ -72,25 +73,14 @@ async def create_user(request: CreateUserRequest):
             detail="用户名不能为空"
         )
 
-    # 用户名长度验证
-    if len(request.username.strip()) < 3:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名长度不能少于3个字符"
-        )
-
-    if len(request.username.strip()) > 50:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名长度不能超过50个字符"
-        )
-
-    # 用户名格式验证（只允许字母、数字、下划线）
+    # F1：新注册用户名 6–20 位字母/数字，且至少含一个字母（legacy 创建同样校验）
     import re
-    if not re.match(r'^[a-zA-Z0-9_]+$', request.username.strip()):
+    if not re.fullmatch(
+        r"^(?=.*[A-Za-z])[A-Za-z0-9]{6,20}$", request.username.strip()
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名只能包含字母、数字和下划线"
+            detail="用户名需为 6-20 位字母或数字，且至少包含一个字母"
         )
 
     # 如果提供了密码，进行密码强度验证

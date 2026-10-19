@@ -194,7 +194,9 @@ class WebSocketManager:
                 "type": "auth_ok",
                 "user": {
                     "id": session.user_id,
+                    # 仅本人可见的 username；其它场景只下发 nickname
                     "username": username,
+                    "nickname": getattr(user, "nickname", None) or username,
                 },
                 "server_time": int(time.time() * 1000),
                 "heartbeat_interval_ms": HEARTBEAT_INTERVAL_SECONDS * 1000,
@@ -285,9 +287,10 @@ class WebSocketManager:
     # ------------------------------------------------------------------ 房间频道
     @staticmethod
     def _user_payload(user: Any) -> Dict[str, Any]:
+        # F1：WS 事件只暴露 nickname（username 仅本人可见）
         return {
             "id": str(getattr(user, "id", "")),
-            "username": getattr(user, "username", ""),
+            "nickname": getattr(user, "nickname", None) or "",
         }
 
     def room_online_user_ids(self, room_id: str) -> Set[str]:
@@ -305,7 +308,7 @@ class WebSocketManager:
             payload.append(
                 {
                     "id": member_id,
-                    "username": member.get("username"),
+                    "nickname": member.get("nickname"),
                     "role": member.get("role", "member"),
                     "online": member_id in online_ids,
                 }
@@ -687,13 +690,15 @@ class WebSocketManager:
                 logger.debug("房间广播发送失败: %s", exc)
 
     async def detach_room_sessions(
-        self, room_id: Any, reason: str = "closed"
+        self, room_id: Any, reason: str = "closed", before_event: Optional[Dict[str, Any]] = None
     ) -> int:
-        """房间关闭时摘除该房间所有在线成员的 WS 会话（复用 detach）。
+        """房间关闭/软删时摘除该房间所有在线成员的 WS 会话（复用 detach）。
 
-        每个成员都会清空 room_id（不再收 chat/canvas 广播），并向余下成员广播
-        ``user_left(reason)``；返回摘除的连接数。
+        可先广播 before_event（如 room_deleted），随后逐个清空 room_id 并向余下
+        成员广播 ``user_left(reason)``；返回摘除的连接数。
         """
+        if before_event is not None:
+            await self.broadcast_to_room(str(room_id), before_event)
         detached = 0
         for session in list(self.sessions.values()):
             if session.room_id is None or str(session.room_id) != str(room_id):
@@ -705,6 +710,17 @@ class WebSocketManager:
             ):
                 detached += 1
         return detached
+
+    async def notify_room_updated(self, room) -> None:
+        """F3：房主修改房间后向房间内所有连接广播 room_updated。"""
+        payload = {
+            "type": "room_updated",
+            "room_id": str(getattr(room, "id", "")),
+            "name": getattr(room, "name", ""),
+            "visibility": getattr(room, "visibility", "public"),
+            "has_password": bool(getattr(room, "password_hash", None)),
+        }
+        await self.broadcast_to_room(str(getattr(room, "id", "")), payload)
 
     async def _cleanup_session(
         self, session: ClientSession, reason: str = "disconnected"

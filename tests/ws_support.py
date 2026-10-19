@@ -72,8 +72,10 @@ class FakeWebSocket:
         return self.sent[-1] if self.sent else None
 
 
-def make_user(user_id=1, username="alice"):
-    return SimpleNamespace(id=user_id, username=username)
+def make_user(user_id=1, username="alice", nickname=None):
+    return SimpleNamespace(
+        id=user_id, username=username, nickname=nickname if nickname is not None else username
+    )
 
 
 def make_room(room_id="room-1", code="A1B2C", **overrides):

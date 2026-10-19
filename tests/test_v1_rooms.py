@@ -236,17 +236,17 @@ class RoomOwnerApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
         )
         with mock.patch.object(
             v1_rooms.rooms_service,
-            "close_room",
+            "delete_room",
             new=mock.AsyncMock(return_value=make_room()),
         ), mock.patch.object(
             v1_rooms, "_get_websocket_manager", return_value=manager
         ):
             response = await v1_rooms.close_room(DummyRequest(), "A1B2C", self.user)
-        self.assertEqual({"closed": True}, response["data"])
+        self.assertEqual({"deleted": True}, response["data"])
         manager.flush_canvas_on_close.assert_awaited_once_with("room-1")
-        manager.detach_room_sessions.assert_awaited_once_with(
-            "room-1", reason="closed"
-        )
+        manager.detach_room_sessions.assert_awaited_once()
+        self.assertEqual("room-1", manager.detach_room_sessions.await_args.args[0])
+        self.assertEqual("deleted", manager.detach_room_sessions.await_args.kwargs["reason"])
 
         manager = SimpleNamespace(
             detach_user_from_room=mock.AsyncMock(return_value=True)
@@ -283,27 +283,31 @@ class BackgroundApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
 
 class RegisterApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
     async def test_register_returns_same_shape_as_login(self):
-        payload = SimpleNamespace(username="bob", password="Pa55w0rd!")
+        payload = SimpleNamespace(username="bobby1", password="Pa55w0rd!")
         with mock.patch.object(
             v1_auth.UserService,
             "create_user",
-            new=mock.AsyncMock(return_value={"success": True, "user": {"id": 7, "username": "bob"}}),
+            new=mock.AsyncMock(return_value={"success": True, "user": {"id": 7, "username": "bobby1", "nickname": "bobby1"}}),
         ) as create_user:
             response = await v1_auth.register(DummyRequest(), payload)
 
-        create_user.assert_awaited_once_with("bob", "Pa55w0rd!")
+        create_user.assert_awaited_once_with("bobby1", "Pa55w0rd!")
         self.assertEqual(200, response["code"])
         data = response["data"]
         self.assertEqual("Bearer", data["token_type"])
         self.assertEqual(7 * 24 * 3600, data["expires_in"])
         self.assertEqual("7", tokens.decode_access_token(data["access_token"]))
-        self.assertEqual({"id": "7", "username": "bob"}, data["user"])
+        self.assertEqual(
+            {"id": "7", "username": "bobby1", "nickname": "bobby1"},
+            data["user"],
+        )
 
     async def test_register_validation(self):
         cases = [
-            (SimpleNamespace(username="ab", password="Pa55w0rd!"), 400),
-            (SimpleNamespace(username="bad name", password="Pa55w0rd!"), 400),
-            (SimpleNamespace(username="bob", password="123"), 400),
+            (SimpleNamespace(username="ab", password="Pa55w0rd!"), 400),  # 太短
+            (SimpleNamespace(username="bad name", password="Pa55w0rd!"), 400),  # 特殊字符
+            (SimpleNamespace(username="123456", password="Pa55w0rd!"), 400),  # 纯数字
+            (SimpleNamespace(username="bobby1", password="123"), 400),  # 密码太短
         ]
         for payload, status in cases:
             with self.subTest(payload=payload):
@@ -312,7 +316,7 @@ class RegisterApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(status, ctx.exception.status_code)
 
     async def test_register_duplicate_returns_409(self):
-        payload = SimpleNamespace(username="bob", password="Pa55w0rd!")
+        payload = SimpleNamespace(username="bobby1", password="Pa55w0rd!")
         with mock.patch.object(
             v1_auth.UserService,
             "create_user",

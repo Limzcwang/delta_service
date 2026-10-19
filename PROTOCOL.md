@@ -86,6 +86,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - 消息历史：请求 `?limit=<1..100，默认 50>&before=<上一页最后一条消息 id>`；`before` 是**消息 id 字符串**（不是时间戳）。
 - 消息历史响应：`data: {"items": [...], "next_before": <消息 id 字符串|null>, "has_more": true|false}`；用户列表沿用 `{"users":[],"total":N}`。
 - 消息历史排序：按 `created_at` **倒序（新→旧）**；消息/房间响应中的 `created_at` 为 Unix 毫秒整数。
+- **历史窗口（F4）**：按成员 `joined_at` 计算；入房未满 7 天只能看最近 7 天，满 7 天可看最近 30 天；超出窗口的 `before` 游标 → `400 INVALID_PAGINATION`（物理清理仍 30 天）。
 - 用户列表分页沿用 `?skip=<int>&limit=<int>`。
 
 ---
@@ -125,7 +126,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
     "access_token": "eyJhbGciOiJIUzI1NiIs...",
     "token_type": "Bearer",
     "expires_in": 604800,
-    "user": {"id": "1", "username": "alice"}
+    "user": {"id": "1", "username": "alice", "nickname": "Alice"}
   },
   "request_id": "req_5f2..."
 }
@@ -138,6 +139,14 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - 所有 `/api/v1/**` 业务接口除 `auth/login` 外都要求有效 token；
 - WebSocket 连接后**第一条业务消息必须是 `auth`**（§6.2）；未认证前除 `auth` 外的任何消息（含 `ping`）一律回 `error`，`code=NOT_AUTHENTICATED`，连接保持、可继续认证；
 - 令牌过期：HTTP 返回 `401 + 40101`；WS 回 `auth_error/AUTH_EXPIRED` 后关闭连接（关闭码建议 4001）。
+
+### 2.4 用户资料（F1）
+
+- `users` 新增 `nickname`（VARCHAR(32)，非空）；老账号由 `scripts/migrate_f.py` 回填为原 `username`，新用户默认等于 `username`。
+- **username 仅本人可见**：登录/注册/`GET /users/me` 可返回自己的 `username`；房间成员、chat_message.user、user_joined/user_left、房主信息等所有他人可见接口/事件只返回 `nickname`。
+- 新注册用户名：**6–20 位 `[A-Za-z0-9]`，至少一个字母，大小写敏感**；老账号登录不受影响。
+- 昵称：`PATCH /api/v1/users/me {nickname}`，1–20 字符，去首尾空白/控制字符，不要求唯一；后续展示实时取 nickname。
+- 改密码：`POST /api/v1/users/me/password {old_password,new_password}`；旧密码错 `WRONG_OLD_PASSWORD`；新密码 8–64；成功不吊销已签发 token。
 
 ---
 
@@ -154,12 +163,12 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 3 | POST | `/api/room/leave` | 无 | `{user_id, room_code}` | `{message}` | 404 `ROOM_NOT_FOUND`；400 `USER_NOT_IN_ROOM`；500 `LEAVE_ROOM_FAILED` |
 | 4 | GET | `/api/room/info/{room_code}` | 无 | path `room_code` | `{room_code,domain,creator,members[],online[],created_at}` | 404 `ROOM_NOT_FOUND` |
 | 5 | GET | `/api/room/public/list` | 无 | – | `{rooms:[RoomInfo]}` | 500 `GET_PUBLIC_ROOMS_FAILED`/`INTERNAL_ERROR` |
-| 6 | POST | `/api/users/create` | 无 | `{username, password?}` | `{code:200,message,data:{id,username}}` | 400（校验/`创建用户失败`） |
-| 7 | GET | `/api/users/{user_id}` | 无 | path int | `{code,message,data:{id,username,created_at,updated_at}}` | 404 / 400 |
+| 6 | POST | `/api/users/create` | 无 | `{username, password?}` | `{code:200,message,data:{id,nickname}}` | 400（校验/`创建用户失败`） |
+| 7 | GET | `/api/users/{user_id}` | 无 | path int | `{code,message,data:{id,nickname,created_at,updated_at}}` | 404 / 400 |
 | 8 | GET | `/api/users/username/{username}` | 无 | path | 同 #7 | 404 / 400 |
-| 9 | PUT | `/api/users/{user_id}` | 无 | `{username?,password?}` | `{code,message,data:{id,username}}` | 400 |
+| 9 | PUT | `/api/users/{user_id}` | 无 | `{username?,password?}` | `{code,message,data:{id,nickname}}` | 400 |
 | 10 | DELETE | `/api/users/{user_id}` | 无 | path int | `{code,message}`（软删除） | 400 |
-| 11 | POST | `/api/users/login` | 无 | `{username,password}` | `{code,message,data:{id,username}}`（**A 无 token**；B 走 §2.2） | 401 |
+| 11 | POST | `/api/users/login` | 无 | `{username,password}` | `{code,message,data:{id,nickname}}`（**A 无 token**；B 走 §2.2） | 401 |
 | 12 | GET | `/api/users/list?skip=&limit=` | 无 | query | `{code,message,data:{users:[],total}}` | 500 |
 
 > 注：A 修复后 `GET /api/users/list` 已不再被 `/{user_id}` 遮蔽（路由顺序已调整）；`/{user_id}` 传非数字仍是 422。
@@ -171,12 +180,14 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 方法 | 路径 | 说明 | 请求 | 响应 `data` |
 |---|---|---|---|---|
 | POST | `/api/v1/auth/login` | 登录签发 JWT | `{username,password}` | `{access_token,token_type,expires_in,user}` |
-| GET | `/api/v1/users/me` | 当前用户 | – | `{id,username,created_at}` |
+| GET | `/api/v1/users/me` | 当前用户（本人可看 username） | – | `{id,username,nickname,created_at}` |
+| PATCH | `/api/v1/users/me` | 修改昵称 | `{nickname}` | `{user:{id,username,nickname}}` |
+| POST | `/api/v1/users/me/password` | 修改密码 | `{old_password,new_password}` | `{changed:true}` |
 | POST | `/api/v1/rooms` | 创建房间（房主=当前用户） | `{name, visibility:"public"\|"private", password?, background_id?}` | `{room}` |
 | GET | `/api/v1/rooms` | 公共房间列表（分页） | `?limit&before` | `{items:[RoomSummary],has_more,next_before}` |
 | GET | `/api/v1/rooms/{room_id_or_code}` | 房间详情（成员/在线/房主/底图） | – | `{room,members:[UserSummary]}` |
-| PATCH | `/api/v1/rooms/{room_id_or_code}` | 房主改名称/底图/密码 | `{name?,background_id?,password? (null=清除)}` | `{room}` |
-| DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主关闭房间 | – | `{closed:true}` |
+| PATCH | `/api/v1/rooms/{room_id_or_code}` | 房主改名称/密码（不可改 visibility/background） | `{name?,password? (null=清除)}` | `{room}` |
+| DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主软删除房间 | – | `{deleted:true}` |
 | POST | `/api/v1/rooms/{room_id_or_code}/join` | 加入房间 | `{password?}` | `{room,members}` |
 | POST | `/api/v1/rooms/{room_id_or_code}/leave` | 离开房间 | – | `{left:true}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C） | `?before&limit` | `{items:[ChatMessage],has_more,next_before}` |
@@ -198,7 +209,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 }
 ```
 
-`Room` = `RoomSummary` + `members:[{id,username,online}]` + `background:{id,url,width,height}`。
+`Room` = `RoomSummary` + `members:[{id,nickname,online}]` + `background:{id,url,width,height}`。
 
 错误：401/403/404/409/429/5xx，见 §7。
 
@@ -211,13 +222,13 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 房间码 | `^[A-Z0-9]{5}$`，服务端生成并保证活跃房间内唯一；客户端输入统一转大写 |
 | 可见性 | `public`（出现在公共列表）/ `private`（不出现，需密码加入） |
 | 私有房间密码 | 服务端用 `security/passwords.py` 的 **scrypt** 哈希存储；**绝不返回哈希**；响应只给 `has_password: bool`；创建/修改密码由房主操作（B） |
-| 房间名 | 1–32 字符（建议），房主可改 |
+| 房间名 | 1–30 字符（去首尾空白），房主可改 |
 | 成员上限 | 建议 8 人（开放问题） |
 | 加入 | 按 `room_code` 或 `room_id`；private 且 `has_password` 必须带 `password`；已在房间内视为幂等成功 |
 | 离开 | 房主离开需先关闭房间或转让（开放问题） |
-| 房主权限 | 改名称、选定运营底图、设置/修改/清除密码、踢人、关闭房间、清空画板（清空权限开放问题） |
-| 公共列表 | 字段见 RoomSummary；仅返回未关闭的 public 房间；支持分页 |
-| 生命周期 | B 起房间元数据落 MySQL（建议）；当前 A 的 `ROOM_MANAGER` 仍是进程内存、重启丢失 |
+| 房主权限 | 改名称/密码、踢人、软删除房间、清空画板；visibility 不可切换（F3）；底图沿用创建时配置 |
+| 公共列表 | 字段见 RoomSummary；仅返回未关闭、未软删的 public 房间；支持分页 |
+| 生命周期 | 房间落 MySQL；`DELETE` 为软删除（deleted=true+closed_at），不物理删；软删后列表/详情/历史/画板/加入均 `ROOM_NOT_FOUND`（选此语义，不暴露删除状态）；软删 code 不复用；房主重复 DELETE 幂等成功 |
 
 ---
 
@@ -274,7 +285,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 ```json
 {
   "type": "auth_ok",
-  "user": {"id": "1", "username": "alice"},
+  "user": {"id": "1", "username": "alice", "nickname": "Alice"},
   "server_time": 1750000000000,
   "heartbeat_interval_ms": 15000
 }
@@ -321,7 +332,9 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 |---|---|
 | `auth_ok` / `auth_error` | 认证结果（§6.2） |
 | `room_joined` | 加入成功，携带房间、成员、画板快照、技能状态 |
-| `user_joined` / `user_left` | 房间成员变化 |
+| `user_joined` / `user_left` | 房间成员变化（user 只用 nickname） |
+| `room_updated` | 房主修改 name/password 后广播 `{room_id,name,visibility,has_password}` |
+| `room_deleted` | 房间软删后广播给在线成员，随后会话被摘除 |
 | `chat_message` | 聊天消息（C） |
 | `canvas_op` | 画板增量广播（D，不含发送者，附 user_id/rev） |
 | `canvas_snapshot_saved` | 画板快照保存确认（D） |
@@ -345,7 +358,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
     "created_at": 1750000000000,
     "background": {"id": "bg_default_01", "url": "https://cdn.example.com/bg/01.png", "width": 1920, "height": 1080}
   },
-  "members": [{"id": "1", "username": "alice", "online": true}],
+  "members": [{"id": "1", "nickname": "Alice", "online": true}],
   "canvas_snapshot": {"strokes": [], "rev": 0},
   "ts": 1750000000000
 }
@@ -354,8 +367,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 `user_joined` / `user_left`：
 
 ```json
-{"type":"user_joined","room_id":"01J8Z9K3Q7","user":{"id":"2","username":"bob"},"ts":1750000001000}
-{"type":"user_left","room_id":"01J8Z9K3Q7","user":{"id":"2","username":"bob"},"reason":"left","ts":1750000002000}
+{"type":"user_joined","room_id":"01J8Z9K3Q7","user":{"id":"2","nickname":"Bob"},"ts":1750000001000}
+{"type":"user_left","room_id":"01J8Z9K3Q7","user":{"id":"2","nickname":"Bob"},"reason":"left","ts":1750000002000}
 ```
 
 `user_left.reason` 语义（C 起）：
@@ -365,6 +378,15 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - `replaced`：同账号新连接顶号，旧连接退出；
 - `closed`：房主关闭房间（HTTP DELETE），服务端摘除该房间**所有在线成员**的 WS 会话并广播。
 
+`room_updated` / `room_deleted`（F）：
+
+```json
+{"type":"room_updated","room_id":"01J8Z9K3Q7","name":"新房间名","visibility":"private","has_password":true}
+{"type":"room_deleted","room_id":"01J8Z9K3Q7","room_code":"A1B2C"}
+```
+
+> 软删后不暴露删除状态：所有访问返回 `ROOM_NOT_FOUND`；房主重复 DELETE 幂等成功。`room_deleted` 发送后服务端会摘除该房间全部 WS 会话。
+
 `chat_message`（C）：
 
 ```json
@@ -372,7 +394,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
   "type": "chat_message",
   "id": "9f2c...",
   "room_id": "01J8Z9K3Q7",
-  "user": {"id": "1", "username": "alice"},
+  "user": {"id": "1", "nickname": "Alice"},
   "content": "大家好",
   "client_msg_id": "m-001",
   "created_at": 1750000001500
@@ -437,7 +459,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
 | 心跳 | 服务端每 30s 下发 `heartbeat`，客户端 90s 未收到可重连；保留 `ping→pong` |
 | 错误格式 | `{"type":"error","code":"...","error_code":"...","message":"..."}`：`code` 为新协议字段，`error_code` 为旧字段兼容（同值） |
-| 房间事件 | `user_joined` / `user_left` 载荷：`room_id`、`room_code`、`user{id,username}`、`ts`（ms）、可选 `reason` |
+| 房间事件 | `user_joined`/`user_left` 载荷 `user{id,nickname}`；另有 `room_updated`、`room_deleted`；`user_left.reason` 含 disconnected/left/kicked/replaced/closed/deleted |
 | 画板/技能 | `room_joined` 已含 `canvas_snapshot{strokes,rev}`；**不包含** `skill_state`（E 阶段加入） |
 
 ### 6.7 共享画板（D 当前实现）
@@ -515,6 +537,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `AUTH_EXPIRED` | token 过期 |
 | `ALREADY_AUTHENTICATED` | 已认证后重复发送 `auth` |
 | `NOT_ROOM_MEMBER` | 非房间成员（聊天/历史接口/未进房） |
+| `ROOM_FORBIDDEN` | 非房主执行 PATCH/DELETE 等房主操作 |
 | `NOT_ROOM_OWNER` | 非房主执行房主操作（如踢人/关闭） |
 | `MEMBER_NOT_FOUND` | 目标成员不存在 |
 | `ROOM_NOT_FOUND` | 房间不存在 |
@@ -524,6 +547,10 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ROOM_FULL` | 房间人数已满（8 人） |
 | `RATE_LIMITED` | 触发限频（聊天：5 条/秒/用户） |
 | `INVALID_MESSAGE` | 聊天内容为空/超过 2000 字符或 client_msg_id 非法 |
+| `INVALID_USERNAME` | 新注册用户名不符合 6–20 位字母/数字且至少一个字母 |
+| `INVALID_NICKNAME` | 昵称为空/超 20 字符/控制字符清理后为空 |
+| `WRONG_OLD_PASSWORD` | 改密码时旧密码错误 |
+| `INVALID_NEW_PASSWORD` | 新密码长度不在 8–64 |
 | `INVALID_PAYLOAD` | JSON 对象结构/字段非法 |
 | `INVALID_JSON` | 消息不是合法 JSON |
 | `UNSUPPORTED_MESSAGE_TYPE` | 当前版本未实现的消息类型 |
@@ -547,6 +574,8 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ROOM_CLOSED` | 409 | 40901 |
 | `RATE_LIMITED` | 429 | 42900 |
 | `INVALID_CANVAS_OP` | 400 | 40000 |
+| `ROOM_FORBIDDEN` | 403 | 40300 |
+| `INVALID_USERNAME` / `INVALID_NICKNAME` / `WRONG_OLD_PASSWORD` / `INVALID_NEW_PASSWORD` | 400 | 40000 |
 | `ROOM_CODE_GENERATION_FAILED` | 500 | 50000 |
 
 成功响应的 `data` 为业务数据；错误响应 `data={"error_code":"..."}`，客户端按该字符串分支（如弹房间密码框）。

@@ -124,14 +124,14 @@ def _dt_to_ms(value: Optional[datetime]) -> Optional[int]:
 
 
 def message_to_dict(message) -> Dict[str, Any]:
-    """序列化消息；绝不包含内部字段。"""
+    """序列化消息；对外只暴露 nickname（username 仅本人可见）。"""
     user = getattr(message, "user", None)
     user_id = getattr(user, "id", None)
-    username = getattr(user, "username", None)
+    nickname = getattr(user, "nickname", None) or ""
     return {
         "id": str(message.id),
         "room_id": str(getattr(message, "room_id", "")),
-        "user": {"id": str(user_id), "username": username},
+        "user": {"id": str(user_id), "nickname": nickname},
         "content": message.content,
         "client_msg_id": getattr(message, "client_msg_id", None),
         "created_at": _dt_to_ms(getattr(message, "created_at", None)),
@@ -160,12 +160,21 @@ async def send_message(
     return message_to_dict(message)
 
 
+def history_window_days(joined_at: Optional[datetime], now: Optional[datetime] = None) -> int:
+    """F4：加入未满 7 天看最近 7 天，满 7 天看最近 30 天。"""
+    if joined_at is None:
+        return 7
+    now = now or datetime.now()
+    return 30 if (now - joined_at) >= timedelta(days=7) else 7
+
+
 async def list_messages(
     room,
     before: Any = None,
     limit: int = DEFAULT_PAGE_SIZE,
+    joined_at: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """历史消息倒序分页；before 为上一页最后一条消息 id。"""
+    """历史消息倒序分页；历史窗口按成员 joined_at 计算。"""
     try:
         limit = int(limit)
     except (TypeError, ValueError) as exc:
@@ -176,6 +185,10 @@ async def list_messages(
             f"limit 需在 1-{MAX_PAGE_SIZE} 之间",
         )
 
+    now = datetime.now()
+    window_days = history_window_days(joined_at, now)
+    since = now - timedelta(days=window_days)
+
     before_message = None
     if before is not None and before != "":
         if not isinstance(before, str):
@@ -183,8 +196,13 @@ async def list_messages(
         before_message = await MessageDao.get_by_id_for_room(room.id, before)
         if before_message is None:
             raise MessageError(ERR_INVALID_PAGINATION, "before 游标无效")
+        # 超出成员历史窗口的游标 → 400（契约见 PROTOCOL）
+        if before_message.created_at < since:
+            raise MessageError(ERR_INVALID_PAGINATION, "before 游标超出历史窗口")
 
-    messages = await MessageDao.list_for_room(room.id, before_message, limit)
+    messages = await MessageDao.list_for_room(
+        room.id, before_message, limit, since=since
+    )
     has_more = len(messages) > limit
     page = messages[:limit]
     next_before = page[-1].id if has_more and page else None
