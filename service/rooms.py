@@ -280,6 +280,18 @@ async def get_room_detail(room_id_or_code: str) -> Tuple[Room, List[Dict[str, An
     return room, await list_members(room)
 
 
+async def get_room_for_member(
+    room_id_or_code: str, user
+) -> Tuple[Room, List[Dict[str, Any]]]:
+    """WS 进房前校验：房间存在、未关闭、且用户已是房间成员（HTTP join 过）。"""
+    room = await resolve_room(room_id_or_code)
+    _ensure_open(room)
+    membership = await RoomMemberDao.get(room.id, getattr(user, "id", None))
+    if membership is None:
+        raise RoomError(ERR_NOT_ROOM_MEMBER, "你不在该房间中", 403)
+    return room, await list_members(room)
+
+
 async def join_room(
     user,
     room_id_or_code: str,

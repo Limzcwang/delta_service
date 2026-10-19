@@ -80,7 +80,6 @@ jobs:
           docker run -d \
             --name delta-service-container \
             -p 8000:8000 \
-            -p 8765:8765 \
             --restart unless-stopped \
             --env-file "$DB_ENV_FILE" \
             delta-service

@@ -35,7 +35,7 @@ echo ""
 echo "2. 检查端口映射..."
 
 HTTP_PORT=8000
-WS_PORT=8765
+WS_PORT=8000  # WebSocket /ws 与 HTTP 共用端口
 
 # 检查HTTP端口
 if netstat -tulpn 2>/dev/null | grep -q ":$HTTP_PORT"; then
@@ -44,12 +44,8 @@ else
     echo "⚠ HTTP端口 $HTTP_PORT 未监听"
 fi
 
-# 检查WebSocket端口
-if netstat -tulpn 2>/dev/null | grep -q ":$WS_PORT"; then
-    echo "✓ WebSocket端口 $WS_PORT 已监听"
-else
-    echo "⚠ WebSocket端口 $WS_PORT 未监听"
-fi
+# WebSocket 与 HTTP 共用 8000（/ws），无需单独端口检查
+echo "✓ WebSocket /ws 与 HTTP 共用端口 $WS_PORT"
 
 # 检查服务健康状态
 echo ""
@@ -67,17 +63,9 @@ fi
 echo ""
 echo "4. 检查WebSocket服务..."
 
-# 简单的WebSocket连接测试
-if command -v nc &> /dev/null; then
-    # 使用nc检查端口是否可连接
-    if echo | nc -w 1 localhost $WS_PORT &> /dev/null; then
-        echo "✓ WebSocket端口 $WS_PORT 可连接"
-    else
-        echo "⚠ WebSocket端口 $WS_PORT 无法连接"
-    fi
-else
-    echo "⚠ nc命令不可用，跳过WebSocket连接测试"
-fi
+# WebSocket 与 HTTP 共用 8000，nc 只能证明 TCP 可连，不能验证 /ws 握手；
+# 建议使用桌面客户端或 websocat ws://localhost:8000/ws 验证。
+echo "⚠ WebSocket /ws 与 HTTP 共用 8000，请用客户端或 websocat 验证握手"
 
 # 检查容器日志
 echo ""
@@ -114,7 +102,7 @@ if [ "$STATUS" = "running" ] && [ "$HTTP_STATUS" = "200" ]; then
     echo ""
     echo "服务访问信息:"
     echo "- HTTP API文档: http://服务器IP:$HTTP_PORT/docs"
-    echo "- WebSocket服务: ws://服务器IP:$WS_PORT"
+    echo "- WebSocket服务: ws://服务器IP:8000/ws"
     echo ""
     echo "下一步操作:"
     echo "1. 在浏览器中打开API文档进行测试"

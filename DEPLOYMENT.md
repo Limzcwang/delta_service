@@ -17,7 +17,7 @@
 | 代码检出 | `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`（v4.2.2，固定 SHA） |
 | 构建 | `docker build -t delta-service .`（基础镜像先尝试从腾讯云镜像预拉） |
 | 冒烟 | 用同一 `db.env` 起临时容器 `delta-service-smoke`（宿主 18000→容器 8000），轮询 `/docs` 最多 30×2s |
-| 部署 | `docker rm -f delta-service-container` 后 `docker run -d --name delta-service-container -p 8000:8000 -p 8765:8765 --restart unless-stopped --env-file /etc/delta-service/db.env delta-service` |
+| 部署 | `docker rm -f delta-service-container` 后 `docker run -d --name delta-service-container -p 8000:8000 --restart unless-stopped --env-file /etc/delta-service/db.env delta-service` |
 | 健康检查 | 轮询 `http://127.0.0.1:8000/health` 最多 30×2s，非 200 则打印容器日志并失败 |
 
 流水线步骤与 `deploy.yml` 的对应关系：
@@ -40,7 +40,7 @@
 | 需求 | 说明 |
 |---|---|
 | Docker | `docker` 命令可用，daemon 正常运行；runner 用户能执行 `docker`（在 `docker` 组或通过 sudo 白名单） |
-| 端口 | 宿主机 `8000`（HTTP）、`8765`（WS）未被其它进程占用 |
+| 端口 | 宿主机 `8000`（HTTP + WebSocket `/ws`）未被其它进程占用；旧 8765 默认关闭 |
 | 磁盘 | 保留足够空间给镜像；定期 `docker image prune` |
 | 时区 | 容器内使用系统默认时区；应用日志时间取进程本地时间 |
 
@@ -126,7 +126,7 @@ sudo stat -c '%U:%G %a' /etc/delta-service/db.env   # 期望 root:runneruser 640
 3. Preflight 校验 Docker 与 env-file；
 4. 构建镜像 `delta-service:latest`（每次覆盖），期间从腾讯云镜像预拉 Python 基础镜像；
 5. 用生产 env-file 起临时容器做冒烟测试（18000 端口），访问 `/docs`；
-6. 删除旧容器，启动 `delta-service-container`（8000/8765，`unless-stopped`）；
+6. 删除旧容器，启动 `delta-service-container`（仅 8000，`unless-stopped`）；WebSocket 走同一端口的 `/ws`；
 7. 轮询 `/health`，失败则输出 `docker logs delta-service-container` 后 job 失败；
 8. 部署后建议人工执行一次 `bash /root/delta-deploy.sh --check`（如脚本支持）或仓库内的 `check_deployment.sh` 做巡检。
 
@@ -148,7 +148,7 @@ docker run -d --name delta-service-smoke -p 18000:8000 --env-file /etc/delta-ser
 # 轮询 http://127.0.0.1:18000/docs 直到 200（最多约 60s），失败则失败退出
 docker rm -f delta-service-container 2>/dev/null || true
 docker run -d --name delta-service-container \
-  -p 8000:8000 -p 8765:8765 --restart unless-stopped \
+  -p 8000:8000 --restart unless-stopped \
   --env-file /etc/delta-service/db.env delta-service
 # 轮询 http://127.0.0.1:8000/health 直到 200
 ```
@@ -173,7 +173,7 @@ docker image inspect delta-service --format '{{.Id}}' | sudo tee /root/delta-ser
 OLD_ID=$(cat /root/delta-service-image-id.bak)
 docker rm -f delta-service-container
 docker run -d --name delta-service-container \
-  -p 8000:8000 -p 8765:8765 --restart unless-stopped \
+  -p 8000:8000 --restart unless-stopped \
   --env-file /etc/delta-service/db.env "$OLD_ID"
 # 健康检查
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health
@@ -217,8 +217,8 @@ sudo bash /root/delta-deploy.sh
 | 冒烟测试失败（18000 无 200） | 应用启动即失败：DB 连不上/环境变量缺失/口令错误 | `docker logs delta-service-smoke`；应用对 DB 是 **fail-fast**，先看 `DatabaseConfigError` 或 MySQL 拒绝连接；确认 env-file 的 host/账号可达 |
 | 部署后 `/health` 一直非 200 | 容器崩溃、端口占用、健康检查 URL 不对 | `docker ps -a`、`docker logs delta-service-container`、`ss -lntp \| grep :8000`；`/health` 由应用自身提供，进程起来才 200 |
 | 容器反复重启（`restart unless-stopped`） | 启动即异常退出（DB/配置错误） | `docker logs --tail 200 delta-service-container`；修复 env-file/DB 后重新部署 |
-| `Bind for 0.0.0.0:8000 failed: port is already allocated` | 8000/8765 被其它进程占用 | `ss -lntp \| grep -E ':8000\|:8765'`，停掉占用进程或调整端口（同时改流水线与防火墙） |
-| WS 客户端连不上 8765 | 服务端只绑定 `localhost`，容器端口映射无效（代码问题） | 修改 `websocket/websocket_manager.py:224` 绑定地址为 `0.0.0.0` 或经反向代理；见 [FEATURES.md](FEATURES.md) |
+| `Bind for 0.0.0.0:8000 failed: port is already allocated` | 8000 被其它进程占用 | `ss -lntp \| grep ':8000'`，停掉占用进程或调整端口（同时改流水线与防火墙） |
+| WS 客户端连不上 | 客户端未用 `/ws` 路径，或反向代理没有转发 WebSocket Upgrade | 使用 `ws://<host>:8000/ws`（生产 `wss://<host>/ws`）；确认反代对 `/ws` 支持 Upgrade；旧 8765 默认关闭（`LEGACY_WS_ENABLED=true` 才启动，不建议） |
 | 磁盘满 / 镜像堆积 | 每次构建产生新镜像，旧镜像 dangling | `docker image prune -f`（确认无回滚需求后）；建议保留最近 2 个镜像 ID |
 | 部署后旧容器仍在跑 | 并发/手动操作冲突 | `docker ps --filter name=delta-service` 确认；删除手工起的旧容器 |
 
@@ -230,7 +230,7 @@ sudo bash /root/delta-deploy.sh
 
 ## 7. 部署后巡检
 
-仓库内的 `check_deployment.sh` 是**手动诊断脚本**（不是 CI 步骤），检查：容器存在/状态/启动时间、8000/8765 监听、`/docs` 200、容器日志中的 error、`docker stats`。用法：
+仓库内的 `check_deployment.sh` 是**手动诊断脚本**（不是 CI 步骤），检查：容器存在/状态/启动时间、8000 监听、`/docs` 200、容器日志中的 error、`docker stats`。用法：
 
 ```bash
 bash check_deployment.sh
@@ -238,8 +238,8 @@ bash check_deployment.sh
 
 注意：
 
-- 它假设容器名 `delta-service-container`、HTTP 8000、WS 8765；
-- WS 检查用 `nc -w 1 localhost 8765`，**只能证明端口可连**，不能验证 WS 握手/协议；且受 `localhost` 绑定问题影响，在宿主机上探测可能误导；
+- 它假设容器名 `delta-service-container`、端口 8000（HTTP + `/ws`）；
+- WS 与 HTTP 共用 8000；脚本不再单独探 8765。`nc` 探端口不能验证 `/ws` 握手，建议用 `websocat ws://localhost:8000/ws` 或客户端联调；
 - `/docs` 200 只说明 HTTP 进程在跑，不检查数据库连接（应用启动时已 fail-fast）。
 
 ## 8. 与旧文档的关系

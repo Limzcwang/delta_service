@@ -152,6 +152,9 @@ class _StubRouter:
     def patch(self, *args, **kwargs):
         return self._register("PATCH", args, kwargs)
 
+    def websocket(self, *args, **kwargs):
+        return self._register("WEBSOCKET", args, kwargs)
+
     def delete(self, *args, **kwargs):
         return self._register("DELETE", args, kwargs)
 
@@ -188,11 +191,16 @@ class _StubStatus:
 
 def install_fastapi_stub():
     """安装 fastapi 最小替身（APIRouter/HTTPException/Request/Depends/status）。"""
+    class StubWebSocketDisconnect(Exception):
+        pass
+
     _replace_module(
         "fastapi",
         APIRouter=_StubRouter,
         HTTPException=StubHTTPException,
         Request=object,
+        WebSocket=object,
+        WebSocketDisconnect=StubWebSocketDisconnect,
         Depends=lambda dependency: dependency,
         status=_StubStatus,
     )
@@ -342,3 +350,7 @@ def install_jwt_stub():
     module.InvalidSignatureError = InvalidSignatureError
     module.ExpiredSignatureError = ExpiredSignatureError
     sys.modules["jwt"] = module
+
+
+# 导入 support 的测试默认即可使用 JWT 依赖（未安装 PyJWT 时使用等价 stub）
+install_jwt_stub()

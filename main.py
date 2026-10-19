@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import uvicorn
 from fastapi import Request
@@ -11,6 +12,12 @@ from log.sql_logger import init_sql_logging
 from websocket import (
     websocket_manager
 )
+
+
+def _legacy_ws_enabled() -> bool:
+    """旧独立 8765 WebSocket server 开关（B2b 起默认关闭，改用 /ws 单端口）。"""
+    value = os.getenv("LEGACY_WS_ENABLED", "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 # 全局异常处理器
@@ -108,14 +115,22 @@ async def main():
         # 初始化服务
         await init_services()
 
-        # 后台任务唯一启动点：data_pusher / inactive_user_checker 只在这里启动，
-        # websocket_manager.run_websocket_server() 不再重复 create_task。
-        await asyncio.gather(
-            websocket_manager.run_websocket_server(),
-            run_api_server(),
-            websocket_manager.data_pusher(),
-            websocket_manager.inactive_user_checker()
-        )
+        # WebSocket 主入口是 FastAPI 的 /ws（与 HTTP 共用 8000）。
+        # 旧独立 8765 server 及其 data_pusher/inactive_user_checker 仅在
+        # LEGACY_WS_ENABLED=true 时启动（默认关闭），新 /ws 不需要它们。
+        tasks = [run_api_server()]
+        if _legacy_ws_enabled():
+            logger.warning(
+                "LEGACY_WS_ENABLED=true，启动旧 8765 WebSocket server 及后台任务"
+            )
+            tasks.extend(
+                [
+                    websocket_manager.run_websocket_server(),
+                    websocket_manager.data_pusher(),
+                    websocket_manager.inactive_user_checker(),
+                ]
+            )
+        await asyncio.gather(*tasks)
     except Exception as e:
         log_exception(e, "Delta Service 启动失败")
         raise

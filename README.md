@@ -39,13 +39,13 @@
 |---|---|
 | 语言/运行时 | Python 3.11+（镜像 `python:3.11-slim`） |
 | HTTP 框架 | FastAPI（Swagger UI 在 `/docs`，OpenAPI 在 `/openapi.json`） |
-| WebSocket | `websockets` 库（独立 server，默认 `ws://localhost:8765`，见下方限制） |
+| WebSocket | FastAPI `/ws`（与 HTTP 同端口：`ws://<host>:8000/ws`；旧独立 8765 server 默认关闭） |
 | ORM | Tortoise ORM + aiomysql（MySQL） |
-| 进程模型 | **单进程** asyncio：`main.py` 里用 `asyncio.gather` 同时跑 HTTP(8000)、WS(8765)、定时推送、离线检测 |
+| 进程模型 | **单进程** asyncio：`main.py` 用 `asyncio.gather` 跑 HTTP+WS（同端口 8000）；旧 8765 server/推送/离线检测仅在 `LEGACY_WS_ENABLED=true` 时启动 |
 | 持久化 | 仅 `users` 表（MySQL）；房间/消息历史/在线状态均在内存字典 |
 | 部署 | Docker 镜像 + GitHub Actions self-hosted runner（见 [DEPLOYMENT.md](DEPLOYMENT.md)） |
 
-> ⚠️ WebSocket server 绑定的是 `localhost`（`websocket/websocket_manager.py:222-225`），Docker 的 `-p 8765:8765` 只能映射容器端口，**从宿主机/外网仍连不上 WS**，需要改绑定地址或走反向代理，见 [FEATURES.md](FEATURES.md)。
+> WebSocket 与 HTTP 共用 8000 端口（`/ws`），反代/防火墙只需处理 8000 一个业务端口。旧独立 8765 server 默认关闭（`LEGACY_WS_ENABLED=true` 才启动），不应再对公网开放。
 
 ## 3. 目录结构
 
@@ -134,7 +134,7 @@ python main.py
 |---|---|---|
 | HTTP API | <http://localhost:8000> | Swagger UI：<http://localhost:8000/docs> |
 | 健康检查 | <http://localhost:8000/health> | 恒返回 `{"status":"healthy","service":"delta_service"}`（不检查 DB） |
-| WebSocket | `ws://localhost:8765` | 仅绑定 `localhost`；容器外不可达（见第 8 节） |
+| WebSocket | `ws://localhost:8000/ws` | 与 HTTP 同端口；旧 8765 默认关闭 |
 
 启动时会执行 `Tortoise.init` 并 `generate_schemas()`（建表，不做 ALTER/迁移）；数据库连不上时进程直接退出。
 
@@ -143,7 +143,7 @@ python main.py
 ```bash
 # 先参考 .env.example 创建 db.env（DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME）
 docker build -t delta-service .
-docker run --rm -p 8000:8000 -p 8765:8765 --env-file ./db.env delta-service
+docker run --rm -p 8000:8000 --env-file ./db.env delta-service
 ```
 
 > WS 仍受 `localhost` 绑定限制；容器内 `docker logs` 可看到启动日志。生产流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
@@ -385,7 +385,7 @@ GET `/health` → `{"status":"healthy","service":"delta_service"}`（Docker `HEA
 
 ## 8. WebSocket 协议
 
-- 地址：`ws://localhost:8765`（只绑定 `localhost`；`ping_interval=20s`，`ping_timeout=10s`）
+- 地址：`ws://localhost:8000/ws`（与 HTTP 同端口；`ping_interval=20s`，`ping_timeout=10s`；旧 8765 默认关闭）
 - 所有消息都是 JSON 文本；服务端消息均带 `type` 字段。
 - **鉴权是弱校验**：客户端先发 `{"type":"authenticate","username":"alice"}`，服务端只检查该用户名是否在 HTTP 登录后的内存在线表中（5 分钟内活跃）。**不校验口令/token，任何人可冒用在线的用户名。**
 
@@ -423,13 +423,13 @@ GET `/health` → `{"status":"healthy","service":"delta_service"}`（Docker `HEA
 | `message_sent` | 发送确认 | `message` |
 | `broadcast` | 全连接广播 | `from`、`content` |
 | `heartbeat` | 服务端每 30s 心跳 | `time` |
-| `push` | 每 15s 定时推送（当前是模拟数据） | `data_id`、`value`(20–110，模拟值)、`timestamp` |
+| `push` | 旧 8765 连接每 15s 定时推送（当前是模拟数据；`/ws` 不推送，且仅 `LEGACY_WS_ENABLED=true` 时存在） | `data_id`、`value`(20–110，模拟值)、`timestamp` |
 | `pong` / `activity_ack` / `echo` / `ack` | ping、活动、回显、兜底 | – |
 | `error` | 错误 | `message`，JSON/处理失败时带 `error_code` |
 
 ### 8.4 已知 WS 限制
 
-- WS 服务只绑定 `localhost`（`websocket/websocket_manager.py:222-225`），Docker `-p 8765:8765` 不能让它从容器外访问；生产如需外网 WS，需修改绑定地址为 `0.0.0.0` 或经反向代理。
+- WS 入口是 FastAPI `/ws`（与 HTTP 共用 8000）；旧独立 8765 server 默认关闭，仅在 `LEGACY_WS_ENABLED=true` 时启动，且**不应再对公网开放**。
 - 没有 token/会话恢复、没有断线重连协议、没有 wss（TLS 需反向代理）。
 - 定时推送发送的是演示数据 `value=20 + 10*(counter%10)`，不是真实业务数据。
 - `main.py` 与 `run_websocket_server()` 都启动了 `data_pusher`/`inactive_user_checker`，实际会**各跑两份**（双倍推送/检测）。
