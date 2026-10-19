@@ -177,6 +177,24 @@ class CreateRoomTests(RoomServiceTestCase):
         self.assertTrue(verify_password("room-pass", room.password_hash))
         self.assertNotIn("room-pass", room.password_hash)
 
+    def test_private_room_password_length_boundaries(self):
+        # 4 位允许
+        room = self._run(
+            rooms.create_room(make_user(), "私房", "private", password="1234")
+        )
+        self.assertTrue(verify_password("1234", room.password_hash))
+        # 32 位允许
+        room = self._run(
+            rooms.create_room(make_user(), "私房", "private", password="x" * 32)
+        )
+        self.assertTrue(verify_password("x" * 32, room.password_hash))
+        # 33 位拒绝
+        with self.assertRaises(rooms.RoomError) as ctx:
+            self._run(
+                rooms.create_room(make_user(), "私房", "private", password="x" * 33)
+            )
+        self.assertEqual(rooms.ERR_ROOM_PASSWORD_INVALID, ctx.exception.error_code)
+
     def test_private_room_requires_password(self):
         with self.assertRaises(rooms.RoomError) as ctx:
             self._run(rooms.create_room(make_user(), "私房", "private"))
@@ -452,6 +470,25 @@ class KickCloseUpdateTests(RoomServiceTestCase):
                 rooms.update_room(make_user(1), room.id, {"name": "x" * 31})
             )
         self.assertEqual(rooms.ERR_ROOM_NAME_INVALID, ctx.exception.error_code)
+
+    def test_update_password_length_boundaries(self):
+        room = self.seed_room(owner_id=1, visibility="private")
+        updated = self._await(
+            rooms.update_room(make_user(1), room.id, {"password": "x" * 32})
+        )
+        self.assertTrue(verify_password("x" * 32, updated.password_hash))
+
+        with self.assertRaises(rooms.RoomError) as ctx:
+            self._await(
+                rooms.update_room(make_user(1), room.id, {"password": "x" * 33})
+            )
+        self.assertEqual(rooms.ERR_ROOM_PASSWORD_INVALID, ctx.exception.error_code)
+
+        # 4 位仍允许
+        updated = self._await(
+            rooms.update_room(make_user(1), room.id, {"password": "1234"})
+        )
+        self.assertTrue(verify_password("1234", updated.password_hash))
 
     def test_update_password_set_and_clear(self):
         room = self.seed_room(owner_id=1, visibility="private")

@@ -180,7 +180,7 @@ class RegisterPasswordTests(unittest.IsolatedAsyncioTestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    async def test_registration_password_8_to_64(self):
+    async def test_registration_password_8_to_32(self):
         for password in ("123456", "1234567"):
             with self.subTest(length=len(password)):
                 with self.assertRaises(v1_common.APIError) as ctx:
@@ -190,7 +190,7 @@ class RegisterPasswordTests(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual("INVALID_NEW_PASSWORD", ctx.exception.error_code)
 
-        for password, ok in (("12345678", True), ("x" * 64, True), ("x" * 65, False)):
+        for password, ok in (("12345678", True), ("x" * 32, True), ("x" * 33, False)):
             with self.subTest(length=len(password)):
                 with mock.patch.object(
                     v1_auth.UserService,
@@ -268,6 +268,20 @@ class ChangePasswordApiTests(unittest.IsolatedAsyncioTestCase):
         change.assert_awaited_once_with(1, "old-pass", "new-pass-123")
         self.assertEqual({"changed": True}, response["data"])
 
+    async def test_change_password_accepts_32(self):
+        with mock.patch.object(
+            v1_auth.UserService,
+            "change_password",
+            new=mock.AsyncMock(return_value={"success": True}),
+        ) as change:
+            response = await v1_auth.change_my_password(
+                DummyRequest(),
+                SimpleNamespace(old_password="old", new_password="x" * 32),
+                make_user(),
+            )
+        self.assertEqual({"changed": True}, response["data"])
+        change.assert_awaited_once()
+
     async def test_wrong_old_password(self):
         with mock.patch.object(
             v1_auth.UserService,
@@ -290,7 +304,7 @@ class ChangePasswordApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(400, ctx.exception.status_code)
 
     async def test_new_password_length(self):
-        for password in ("short", "x" * 65):
+        for password in ("short", "x" * 33):
             with self.subTest(length=len(password)):
                 with self.assertRaises(v1_common.APIError) as ctx:
                     await v1_auth.change_my_password(
