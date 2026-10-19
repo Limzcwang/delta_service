@@ -96,9 +96,11 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 算法 | **HS256**（`PyJWT`），服务端密钥 `JWT_SECRET`（≥32 字节随机，只放部署机 env） |
 | Header | `Authorization: Bearer <token>`（HTTP）；WebSocket 首消息携带（§6.2） |
 | Claims | `sub`=用户 ID 字符串、`iat`、`exp`、`jti`（可选）、`ver`=协议版本（建议） |
-| 有效期 | 建议 `exp = iat + 12h`（开放问题：是否需要 refresh token） |
-| 时钟偏差 | 服务端允许 ±60s |
+| 有效期 | **7 天**：`exp = iat + 7d`（`JWT_EXPIRE_DAYS` 默认 7，`expires_in=604800`）。**无 refresh token**，过期后客户端重新登录；紧急失效通过轮换 `JWT_SECRET` 让全部已签发令牌立即失效 |
+| 时钟偏差 | 服务端允许 **±60s**（`decode_access_token` 的 `leeway=60`，容忍桌面端时钟漂移） |
 | 错误 | 缺失/格式错/过期/签名错分别返回 401 + 错误码（§7）；**不区分“用户不存在”和“密码错误”** |
+
+> `JWT_SECRET` 长度 <32 字节时，服务端首次使用会 `logger.warning` 提醒但**不阻断**（方便本地开发）；生产环境务必使用 ≥32 字节随机密钥。
 
 > 当前 HEAD（A）**没有 JWT**：`POST /api/users/login` 只校验口令并写入进程内在线表，不返回 token；WebSocket 的 `authenticate` 只校验用户名是否在线。B 阶段替换为 JWT，并保留一个版本的兼容开关（`LEGACY_WS_AUTH=1`，默认关闭）。
 
@@ -119,7 +121,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
   "data": {
     "access_token": "eyJhbGciOiJIUzI1NiIs...",
     "token_type": "Bearer",
-    "expires_in": 43200,
+    "expires_in": 604800,
     "user": {"id": "1", "username": "alice"}
   },
   "request_id": "req_5f2..."
@@ -524,7 +526,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | # | 问题 | 建议默认值 | 影响 |
 |---|---|---|---|
 | Q1 | 是否启用 `/api/v1` 前缀？旧 `/api` 何时下线？ | B 起启用 v1，旧路径保留到 C 结束 | 客户端 Base URL/迁移成本 |
-| Q2 | JWT 有效期与刷新策略（是否 refresh token / 单点登录） | 12h，无 refresh，过期重登 | 认证实现与桌面端体验 |
+| Q2 | JWT 有效期与刷新策略（是否 refresh token / 单点登录） | **已定：7 天、无 refresh，过期重登（B1 实现）**；是否增加 refresh/滑动续期后续再议 | 认证实现与桌面端体验 |
 | Q3 | 房间元数据是否落 MySQL、成员上限、房间名长度 | 落库、8 人、1–32 字符 | B 的 schema 与容量 |
 | Q4 | 房主离开/转让/踢人/关闭房间的细则；清空画板权限 | 房主需先转让或关闭；仅房主可清空 | B/D 权限模型 |
 | Q5 | 画板 undo 语义（按用户/全局）、op 保留深度、是否落库 | 仅撤销自己的笔画、保留最近 5000 ops、内存+定期快照 | D 的实现与内存占用 |

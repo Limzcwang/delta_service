@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Optional, Tuple
@@ -19,7 +20,16 @@ ACCESS_TOKEN_TYPE = "access"
 ALGORITHM = "HS256"
 DEFAULT_EXPIRE_DAYS = 7
 
+# 容忍桌面端时钟漂移：过期后 60s 内仍接受（与 PROTOCOL §2.1 一致）
+LEEWAY_SECONDS = 60
+
+# JWT_SECRET 推荐长度（字节）；不足时只告警、不阻断，避免打断本地开发
+SECRET_MIN_BYTES = 32
+
 _REQUIRED_CLAIMS = ("sub", "iat", "exp", "typ")
+
+_logger = logging.getLogger("delta_service")
+_weak_secret_warned = False
 
 
 class TokenError(Exception):
@@ -39,10 +49,25 @@ class TokenExpiredError(TokenInvalidError):
 
 
 def _require_secret(secret: Optional[str] = None) -> str:
+    global _weak_secret_warned
+
     value = secret if secret is not None else os.getenv("JWT_SECRET")
     if value is None or not value.strip():
         raise TokenConfigError("缺少必需的环境变量: JWT_SECRET")
-    return value.strip()
+    value = value.strip()
+
+    # 长度不足只告警一次、不阻断（本地开发可能用短密钥）
+    if (
+        not _weak_secret_warned
+        and len(value.encode("utf-8")) < SECRET_MIN_BYTES
+    ):
+        _weak_secret_warned = True
+        _logger.warning(
+            "JWT_SECRET 长度不足 %d 字节，生产环境请使用至少 %d 字节的随机密钥",
+            SECRET_MIN_BYTES,
+            SECRET_MIN_BYTES,
+        )
+    return value
 
 
 def get_expire_days() -> int:
@@ -101,7 +126,8 @@ def decode_access_token(
 ) -> str:
     """校验并解析访问令牌，返回用户 ID 字符串。
 
-    校验：HS256 签名、必需 claims、``typ=="access"``、过期时间。
+    校验：HS256 签名、必需 claims、``typ=="access"``、过期时间
+    （允许 ``LEEWAY_SECONDS`` 秒时钟偏差）。
     失败抛 ``TokenExpiredError`` / ``TokenInvalidError`` / ``TokenConfigError``。
     """
     if not isinstance(token, str) or not token.strip():
@@ -135,7 +161,8 @@ def decode_access_token(
         raise TokenInvalidError("token 缺少有效的 exp")
 
     current = now if now is not None else time.time()
-    if current >= expires_at:
+    # 允许 LEEWAY_SECONDS 的时钟偏差：过期 59s 内仍通过，超过 60s 拒绝。
+    if current >= expires_at + LEEWAY_SECONDS:
         raise TokenExpiredError("token 已过期")
 
     return subject

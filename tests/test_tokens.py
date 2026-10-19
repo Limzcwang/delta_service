@@ -7,12 +7,13 @@ import time
 import unittest
 from unittest import mock
 
-from tests.support import install_jwt_stub
+from tests.support import capture_logger, install_jwt_stub
 
 install_jwt_stub()
 
 import jwt  # noqa: E402  （离线环境下为 tests/support.py 提供的 HS256 stub）
 
+from log.logger import logger as service_logger  # noqa: E402
 from security import tokens  # noqa: E402
 
 SECRET = "unit-test-jwt-secret-0123456789abcdef"
@@ -40,6 +41,8 @@ class TokenTestCase(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        # 每个用例从“未告警”状态开始
+        tokens._weak_secret_warned = False
 
 
 class CreateAndDecodeTests(TokenTestCase):
@@ -71,14 +74,30 @@ class CreateAndDecodeTests(TokenTestCase):
 
     def test_decode_accepts_injected_clock(self):
         issued_at = 1_700_000_000
-        token, expires_in = tokens.create_access_token(
+        token, _ = tokens.create_access_token(
             1, now=issued_at, expires_in_seconds=60
         )
         self.assertEqual(
             "1", tokens.decode_access_token(token, now=issued_at + 59)
         )
+        # 过期 59s 内仍在 60s 容忍窗口内
+        self.assertEqual(
+            "1", tokens.decode_access_token(token, now=issued_at + 119)
+        )
         with self.assertRaises(tokens.TokenExpiredError):
-            tokens.decode_access_token(token, now=issued_at + 60)
+            tokens.decode_access_token(token, now=issued_at + 120)
+
+    def test_expiry_leeway_59s_passes_60s_rejected(self):
+        issued_at = 1_000
+        token, _ = tokens.create_access_token(
+            1, now=issued_at, expires_in_seconds=100
+        )
+        expires_at = issued_at + 100
+        self.assertEqual(
+            "1", tokens.decode_access_token(token, now=expires_at + 59)
+        )
+        with self.assertRaises(tokens.TokenExpiredError):
+            tokens.decode_access_token(token, now=expires_at + 60)
 
 
 class InvalidTokenTests(TokenTestCase):
@@ -157,6 +176,24 @@ class ConfigTests(TokenTestCase):
                 ):
                     with self.assertRaises(tokens.TokenConfigError):
                         tokens.create_access_token(1)
+
+    def test_short_secret_warns_once_but_does_not_block(self):
+        with mock.patch.dict(
+            os.environ, {"JWT_SECRET": "short-secret"}, clear=False
+        ), capture_logger(service_logger) as capture:
+            token, _ = tokens.create_access_token(1)
+            self.assertEqual("1", tokens.decode_access_token(token))
+            tokens.create_access_token(2)  # 第二次调用不应重复告警
+
+        warnings = [record for record in capture.records if record.levelname == "WARNING"]
+        self.assertEqual(1, len(warnings))
+        self.assertIn("32", warnings[0].getMessage())
+
+    def test_long_secret_does_not_warn(self):
+        with capture_logger(service_logger) as capture:
+            tokens.create_access_token(1)
+        warnings = [record for record in capture.records if record.levelname == "WARNING"]
+        self.assertEqual([], warnings)
 
     def test_empty_user_id_is_rejected(self):
         for value in (None, "", "   "):
