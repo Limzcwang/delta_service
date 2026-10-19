@@ -112,6 +112,8 @@ def install_tortoise_stub():
         "TextField",
         "FloatField",
         "ForeignKeyField",
+        "OneToOneField",
+        "JSONField",
     ):
         setattr(fields, field_name, _StubField)
 

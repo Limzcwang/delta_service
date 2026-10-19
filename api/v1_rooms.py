@@ -24,8 +24,10 @@ from api.v1_common import (
 )
 from service import backgrounds as backgrounds_service
 from log.logger import log_exception
+from service import canvas as canvas_service
 from service import messages as messages_service
 from service import rooms as rooms_service
+from service.canvas import CanvasError
 from service.messages import MessageError
 from service.rooms import RoomError
 
@@ -58,6 +60,8 @@ _ERROR_MAP = {
     "INVALID_CURSOR": (400, CODE_BAD_REQUEST),
     messages_service.ERR_INVALID_MESSAGE: (400, CODE_BAD_REQUEST),
     messages_service.ERR_RATE_LIMITED: (429, CODE_RATE_LIMITED),
+    canvas_service.ERR_INVALID_CANVAS_OP: (400, CODE_BAD_REQUEST),
+    canvas_service.ERR_CANVAS_OUT_OF_ORDER: (409, CODE_CONFLICT),
 }
 
 
@@ -69,6 +73,11 @@ def _raise_room_error(exc: RoomError) -> None:
         exc.message,
         error_code=exc.error_code,
     )
+
+
+def _raise_canvas_error(exc: CanvasError) -> None:
+    status, code = _ERROR_MAP.get(exc.error_code, (400, CODE_BAD_REQUEST))
+    raise APIError(status, code, exc.message, error_code=exc.error_code)
 
 
 def _raise_message_error(exc: MessageError) -> None:
@@ -189,6 +198,33 @@ async def get_room(
     )
 
 
+@router.get("/rooms/{room_id_or_code}/canvas", summary="房间画板快照")
+async def get_room_canvas(
+    request: Request,
+    room_id_or_code: str,
+    user=Depends(get_current_user),
+):
+    """JWT + 房间成员；无快照返回空 strokes/rev=0。"""
+    try:
+        room, _members = await rooms_service.get_room_for_member(
+            room_id_or_code, user
+        )
+    except RoomError as exc:
+        _raise_room_error(exc)
+
+    # DB 快照 ∪ 内存未保存增量（单进程；WS manager 为唯一内存态持有者）
+    try:
+        snapshot = await _get_websocket_manager().get_canvas_snapshot(room.id)
+    except Exception as exc:  # pragma: no cover - 降级为 DB 快照
+        log_exception(exc, "读取合并画板快照失败", {"room": room_id_or_code})
+        try:
+            snapshot = await canvas_service.get_snapshot(room.id)
+        except CanvasError as canvas_exc:
+            _raise_canvas_error(canvas_exc)
+
+    return ok(snapshot, request=request)
+
+
 @router.get("/rooms/{room_id_or_code}/messages", summary="房间历史消息")
 async def list_room_messages(
     request: Request,
@@ -240,9 +276,25 @@ async def close_room(
     user=Depends(get_current_user),
 ):
     try:
-        await rooms_service.close_room(user, room_id_or_code)
+        room = await rooms_service.close_room(user, room_id_or_code)
     except RoomError as exc:
         _raise_room_error(exc)
+
+    # 关房时：画板状态落盘 + 摘除该房间所有成员的 WS 会话（含房主）
+    try:
+        manager = _get_websocket_manager()
+    except Exception as exc:  # pragma: no cover - 防御性
+        log_exception(exc, "关房获取 WS 管理器失败", {"room": room_id_or_code})
+    else:
+        try:
+            await manager.flush_canvas_on_close(room.id)
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "关房画板快照落盘失败", {"room": room_id_or_code})
+        try:
+            await manager.detach_room_sessions(room.id, reason="closed")
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "关房摘除 WS 会话失败", {"room": room_id_or_code})
+
     return ok({"closed": True}, request=request)
 
 

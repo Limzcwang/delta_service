@@ -230,13 +230,23 @@ class RoomOwnerApiTests(ApiTestCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual("NOT_ROOM_OWNER", ctx.exception.error_code)
 
     async def test_close_and_kick_success(self):
+        manager = SimpleNamespace(
+            flush_canvas_on_close=mock.AsyncMock(return_value=2),
+            detach_room_sessions=mock.AsyncMock(return_value=1),
+        )
         with mock.patch.object(
             v1_rooms.rooms_service,
             "close_room",
             new=mock.AsyncMock(return_value=make_room()),
+        ), mock.patch.object(
+            v1_rooms, "_get_websocket_manager", return_value=manager
         ):
             response = await v1_rooms.close_room(DummyRequest(), "A1B2C", self.user)
         self.assertEqual({"closed": True}, response["data"])
+        manager.flush_canvas_on_close.assert_awaited_once_with("room-1")
+        manager.detach_room_sessions.assert_awaited_once_with(
+            "room-1", reason="closed"
+        )
 
         manager = SimpleNamespace(
             detach_user_from_room=mock.AsyncMock(return_value=True)
