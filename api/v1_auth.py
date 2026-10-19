@@ -66,12 +66,11 @@ class ChangePasswordRequest(BaseModel):
 
 # F1：新注册用户名 6–20 位字母/数字，且至少一个字母；大小写敏感；老账号不受影响。
 _USERNAME_RE = re.compile(r"^(?=.*[A-Za-z])[A-Za-z0-9]{6,20}$")
-_PASSWORD_MIN_LENGTH = 8
-_PASSWORD_MAX_LENGTH = 64
 NICKNAME_MIN_LENGTH = 1
 NICKNAME_MAX_LENGTH = 20
-NEW_PASSWORD_MIN_LENGTH = 8
-NEW_PASSWORD_MAX_LENGTH = 64
+# F/H1：账号密码统一 8–32（注册与改密共用，避免多处硬编码）
+NEW_PASSWORD_MIN = 8
+NEW_PASSWORD_MAX = 32
 
 
 def _token_response(user: Any, request: Any = None) -> Dict[str, Any]:
@@ -143,12 +142,12 @@ def _validate_nickname(nickname: Any) -> str:
 
 def _validate_new_password(password: Any) -> str:
     if not isinstance(password, str) or not (
-        NEW_PASSWORD_MIN_LENGTH <= len(password) <= NEW_PASSWORD_MAX_LENGTH
+        NEW_PASSWORD_MIN <= len(password) <= NEW_PASSWORD_MAX
     ):
         raise APIError(
             400,
             CODE_BAD_REQUEST,
-            f"新密码长度需在 {NEW_PASSWORD_MIN_LENGTH}-{NEW_PASSWORD_MAX_LENGTH} 个字符之间",
+            f"新密码长度需在 {NEW_PASSWORD_MIN}-{NEW_PASSWORD_MAX} 个字符之间",
             error_code="INVALID_NEW_PASSWORD",
         )
     return password
@@ -186,14 +185,7 @@ async def login(request: Request, payload: LoginRequest):
 async def register(request: Request, payload: RegisterRequest):
     """创建用户并直接返回与登录一致的 token 响应。"""
     username = _validate_username(payload.username or "")
-    password = payload.password or ""
-    if not _PASSWORD_MIN_LENGTH <= len(password) <= _PASSWORD_MAX_LENGTH:
-        raise APIError(
-            400,
-            CODE_BAD_REQUEST,
-            f"密码长度需在 {_PASSWORD_MIN_LENGTH}-{_PASSWORD_MAX_LENGTH} 个字符之间",
-            error_code="INVALID_NEW_PASSWORD",
-        )
+    password = _validate_new_password(payload.password or "")
 
     result = await UserService.create_user(username, password)
     if not result.get("success"):
@@ -241,7 +233,7 @@ async def change_my_password(
     payload: ChangePasswordRequest,
     user=Depends(get_current_user),
 ):
-    """F1.5：旧密码校验；新密码 8–64；成功不强制下线已有 token。"""
+    """F1.5：旧密码校验；新密码 8–32；成功不强制下线已有 token。"""
     new_password = _validate_new_password(payload.new_password)
     result = await UserService.change_password(
         getattr(user, "id"), payload.old_password or "", new_password

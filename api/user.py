@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
+from api.v1_auth import NEW_PASSWORD_MAX, NEW_PASSWORD_MIN
 from service.user import UserService
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -85,10 +86,10 @@ async def create_user(request: CreateUserRequest):
 
     # 如果提供了密码，进行密码强度验证
     if request.password:
-        if not 8 <= len(request.password) <= 64:
+        if not NEW_PASSWORD_MIN <= len(request.password) <= NEW_PASSWORD_MAX:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="密码长度需在8-64个字符之间"
+                detail=f"密码长度需在{NEW_PASSWORD_MIN}-{NEW_PASSWORD_MAX}个字符之间"
             )
 
     result = await UserService.create_user(request.username.strip(), request.password)

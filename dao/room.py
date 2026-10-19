@@ -121,6 +121,22 @@ class RoomMemberDao:
         )
 
     @staticmethod
+    async def list_for_user(
+        user_id: int,
+        limit: int,
+        before_joined_at: Optional[datetime] = None,
+        offset: int = 0,
+    ) -> List[RoomMember]:
+        """H1 我的房间：按 joined_at 倒序返回成员的房间关系（多取 1 条）。"""
+        query = RoomMember.filter(user_id=user_id).select_related("room")
+        if before_joined_at is not None:
+            query = query.filter(joined_at__lt=before_joined_at)
+        query = query.order_by("-joined_at", "-id")
+        if offset > 0:
+            query = query.offset(offset)
+        return await query.limit(limit + 1)
+
+    @staticmethod
     async def count(room_id: str) -> int:
         return await RoomMember.filter(room_id=room_id).count()
 

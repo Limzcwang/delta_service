@@ -146,8 +146,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - **username 仅本人可见**：登录/注册/`GET /users/me` 可返回自己的 `username`；房间成员、chat_message.user、user_joined/user_left、房主信息等所有他人可见接口/事件只返回 `nickname`。
 - 新注册用户名：**6–20 位 `[A-Za-z0-9]`，至少一个字母，大小写敏感**；老账号登录不受影响。
 - 昵称：`PATCH /api/v1/users/me {nickname}`，1–20 字符，去首尾空白/控制字符，不要求唯一；后续展示实时取 nickname。**已连接的 WS 会话在发送/成员事件前从 DB 刷新用户**，改昵称后无需重连，下一条 `chat_message` 与 `user_joined/user_left` 即使用新昵称（成员列表/房间详情同样实时）。
-- 新注册密码：**8–64 字符**（与改密一致）；6–7 位拒绝 `INVALID_NEW_PASSWORD`；老账号登录不受影响。
-- 改密码：`POST /api/v1/users/me/password {old_password,new_password}`；旧密码错 `WRONG_OLD_PASSWORD`；新密码 8–64；成功不吊销已签发 token。
+- 新注册密码：**8–32 字符**（与改密一致）；6–7 位拒绝 `INVALID_NEW_PASSWORD`；老账号登录不受影响。
+- 改密码：`POST /api/v1/users/me/password {old_password,new_password}`；旧密码错 `WRONG_OLD_PASSWORD`；新密码 8–32；成功不吊销已签发 token。
 
 ---
 
@@ -181,12 +181,13 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | 方法 | 路径 | 说明 | 请求 | 响应 `data` |
 |---|---|---|---|---|
 | POST | `/api/v1/auth/login` | 登录签发 JWT | `{username,password}` | `{access_token,token_type,expires_in,user}` |
-| POST | `/api/v1/auth/register` | 注册并签发 JWT | `{username,password}`（username 6–20 位字母数字含字母；password 8–64） | 同登录 |
+| POST | `/api/v1/auth/register` | 注册并签发 JWT | `{username,password}`（username 6–20 位字母数字含字母；password 8–32） | 同登录 |
 | GET | `/api/v1/users/me` | 当前用户（本人可看 username） | – | `{id,username,nickname,created_at}` |
 | PATCH | `/api/v1/users/me` | 修改昵称 | `{nickname}` | `{user:{id,username,nickname}}` |
 | POST | `/api/v1/users/me/password` | 修改密码 | `{old_password,new_password}` | `{changed:true}` |
 | POST | `/api/v1/rooms` | 创建房间（房主=当前用户） | `{name, visibility:"public"\|"private", password?, background_id?}` | `{room}` |
 | GET | `/api/v1/rooms` | 公共房间列表（分页） | `?limit&before` | `{items:[RoomSummary],has_more,next_before}` |
+| GET | `/api/v1/rooms/mine` | 我的房间（已加入、未关闭未删除，公开+私有） | `?page=1&page_size=20&before=` | `{items:[MyRoom],has_more,next_before}` |
 | GET | `/api/v1/rooms/{room_id_or_code}` | 房间详情（成员/在线/房主/底图） | – | `{room,members:[UserSummary]}` |
 | PATCH | `/api/v1/rooms/{room_id_or_code}` | 房主改名称/密码（不可改 visibility/background） | `{name?,password? (null=清除)}` | `{room}` |
 | DELETE | `/api/v1/rooms/{room_id_or_code}` | 房主软删除房间 | – | `{deleted:true}` |
@@ -195,6 +196,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | GET | `/api/v1/rooms/{room_id_or_code}/messages` | 聊天历史（C，窗口 7/30 天） | `?before&limit` | `{items:[ChatMessage],has_more,next_before,window_days,truncated}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/canvas` | 画板快照（D，DB ∪ 内存增量） | – | `{strokes:[CanvasOp],rev,updated_at}` |
 | GET | `/api/v1/rooms/{room_id_or_code}/skills` | 房间技能状态（E） | – | `{items:[{user_id,ts,skills}]}` |
+
+`MyRoom`（`GET /api/v1/rooms/mine` 每项）= 现有房间公开字段 + `joined_at`（Unix 毫秒）+ `role`（`owner|member`），**不含 password_hash**。该接口需 JWT；只返回当前用户已加入、未关闭未删除的房间（公开/私有均含，私有房已是成员故无需密码）。按 `room_members.joined_at` 倒序；游标 `before` 为上一页最后一项的 `joined_at` 毫秒（同毫秒并列极少，按 joined_at 游标）；`next_before` 同类型；`page/page_size` 为客户端兼容参数（无 `before` 时按 page 偏移，有 before 时以游标为准）。`/rooms/mine` 必须声明在 `/rooms/{room_id_or_code}` 之前。
 
 `RoomSummary`（公共列表字段，产品要求）：
 
@@ -223,11 +226,11 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 |---|---|
 | 房间码 | `^[A-Z0-9]{5}$`，服务端生成并保证活跃房间内唯一；客户端输入统一转大写 |
 | 可见性 | `public`（出现在公共列表）/ `private`（不出现，需密码加入） |
-| 私有房间密码 | 服务端用 `security/passwords.py` 的 **scrypt** 哈希存储；**绝不返回哈希**；响应只给 `has_password: bool`；创建/修改密码由房主操作（B） |
+| 私有房间密码 | 长度 **4–32**；服务端用 `security/passwords.py` 的 **scrypt** 哈希存储；**绝不返回哈希**；响应只给 `has_password: bool`；创建/修改密码由房主操作 |
 | 房间名 | 1–30 字符（去首尾空白），房主可改 |
 | 成员上限 | 建议 8 人（开放问题） |
 | 加入 | 按 `room_code` 或 `room_id`；private 且 `has_password` 必须带 `password`；已在房间内视为幂等成功 |
-| 离开 | 房主离开需先关闭房间或转让（开放问题） |
+| 离开 | 普通成员 `POST /rooms/{id}/leave` 成功；房主离开返回 `ROOM_OWNER_MUST_CLOSE`（409/40900），必须先关房/软删（H1 客户端按 role 显示「关闭」）；退出后 DB 成员关系删除、WS 会话摘除、其他成员收 `user_left(left)`，且不再出现在 `/rooms/mine` |
 | 房主权限 | 改名称/密码、踢人、软删除房间、清空画板；visibility 不可切换（F3）；底图沿用创建时配置 |
 | 公共列表 | 字段见 RoomSummary；仅返回未关闭、未软删的 public 房间；支持分页 |
 | 生命周期 | 房间落 MySQL；`DELETE` 为软删除（deleted=true+closed_at），不物理删；软删后列表/详情/历史/画板/加入均 `ROOM_NOT_FOUND`（选此语义，不暴露删除状态）；软删 code 不复用；房主重复 DELETE 幂等成功 |
@@ -540,6 +543,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `ALREADY_AUTHENTICATED` | 已认证后重复发送 `auth` |
 | `NOT_ROOM_MEMBER` | 非房间成员（聊天/历史接口/未进房） |
 | `ROOM_FORBIDDEN` | 非房主执行 PATCH/DELETE 等房主操作 |
+| `ROOM_OWNER_MUST_CLOSE` | 房主直接 leave（需先关闭/软删房间） |
 | `NOT_ROOM_OWNER` | 非房主执行房主操作（如踢人/关闭） |
 | `MEMBER_NOT_FOUND` | 目标成员不存在 |
 | `ROOM_NOT_FOUND` | 房间不存在 |
@@ -552,7 +556,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `INVALID_USERNAME` | 新注册用户名不符合 6–20 位字母/数字且至少一个字母 |
 | `INVALID_NICKNAME` | 昵称为空/超 20 字符/控制字符清理后为空 |
 | `WRONG_OLD_PASSWORD` | 改密码时旧密码错误 |
-| `INVALID_NEW_PASSWORD` | 新密码/注册密码长度不在 8–64 |
+| `INVALID_NEW_PASSWORD` | 新密码/注册密码长度不在 8–32 |
 | `INVALID_ROOM_PAYLOAD` | 房间 PATCH 载荷不合法（如公开房设置密码；语义：公开房不支持设置密码，如需加密请新建私有房） |
 | `INVALID_PAYLOAD` | JSON 对象结构/字段非法 |
 | `INVALID_JSON` | 消息不是合法 JSON |
@@ -651,7 +655,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 |---|---|---|---|
 | Q1 | 是否启用 `/api/v1` 前缀？旧 `/api` 何时下线？ | B 起启用 v1，旧路径保留到 C 结束 | 客户端 Base URL/迁移成本 |
 | Q2 | JWT 有效期与刷新策略（是否 refresh token / 单点登录） | **已定：7 天、无 refresh，过期重登（B1 实现）**；是否增加 refresh/滑动续期后续再议 | 认证实现与桌面端体验 |
-| Q3 | 房间元数据是否落 MySQL、成员上限、房间名长度 | 落库、8 人、1–32 字符 | B 的 schema 与容量 |
+| Q3 | 房间元数据是否落 MySQL、成员上限、房间名长度 | 落库、8 人、1–30 字符 | B 的 schema 与容量 |
 | Q4 | 房主离开/转让/踢人/关闭房间的细则；清空画板权限 | 房主需先关闭；房间成员均可发 `clear` / 保存快照 | B/D 权限模型 |
 | Q5 | 画板 undo 语义、op 保留深度、是否落库 | **已定：D 不做 undo**；内存累计最多 5000 笔，仅显式 `canvas_snapshot_save` + 关房 flush 落库 | D 的实现与内存占用 |
 | Q6 | 聊天历史保留策略（内存/DB、条数/天数、分页游标） | MySQL 保留 30 天，游标分页 | C 的存储与合规 |
