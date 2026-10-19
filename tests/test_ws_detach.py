@@ -94,6 +94,56 @@ class DetachSessionTests(_DetachTestCase):
         self.assertEqual(self.room.id, self.bob_session.room_id)
 
 
+class RoomCloseDetachTests(_DetachTestCase):
+    async def test_detach_room_sessions_detaches_all_members(self):
+        detached = await self.manager.detach_room_sessions(
+            self.room.id, reason="closed"
+        )
+
+        self.assertEqual(2, detached)
+        self.assertIsNone(self.alice_session.room_id)
+        self.assertIsNone(self.bob_session.room_id)
+        self.assertEqual(set(), self.manager.room_online_user_ids(self.room.id))
+        reasons = [
+            event.get("reason")
+            for event in self.alice_ws.messages("user_left")
+            + self.bob_ws.messages("user_left")
+        ]
+        self.assertIn("closed", reasons)
+
+    async def test_http_close_detaches_all_and_blocks_chat_canvas(self):
+        with mock.patch.object(
+            v1_rooms.rooms_service,
+            "close_room",
+            new=mock.AsyncMock(return_value=self.room),
+        ), mock.patch.object(
+            v1_rooms, "_get_websocket_manager", return_value=self.manager
+        ):
+            response = await v1_rooms.close_room(
+                DummyRequest(), self.room.code, self.alice
+            )
+        self.assertEqual({"closed": True}, response["data"])
+        self.assertIsNone(self.alice_session.room_id)
+        self.assertIsNone(self.bob_session.room_id)
+
+        # 关房后成员仍连着 WS，但聊天/画板都被拒绝
+        await self.manager.process_message(
+            self.alice_session,
+            json.dumps({"type": "chat_send", "content": "hi"}),
+        )
+        self.assertEqual("NOT_ROOM_MEMBER", self.alice_ws.last()["code"])
+        await self.manager.process_message(
+            self.alice_session,
+            json.dumps({
+                "type": "canvas_op",
+                "room_id": self.room.id,
+                "rev": 1,
+                "op": {"kind": "clear"},
+            }),
+        )
+        self.assertEqual("NOT_ROOM_MEMBER", self.alice_ws.last()["code"])
+
+
 class HttpLeaveKickDetachTests(_DetachTestCase):
     async def test_http_leave_detaches_ws_session(self):
         with mock.patch.object(

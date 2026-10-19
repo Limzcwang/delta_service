@@ -639,6 +639,26 @@ class WebSocketManager:
             except Exception as exc:
                 logger.debug("房间广播发送失败: %s", exc)
 
+    async def detach_room_sessions(
+        self, room_id: Any, reason: str = "closed"
+    ) -> int:
+        """房间关闭时摘除该房间所有在线成员的 WS 会话（复用 detach）。
+
+        每个成员都会清空 room_id（不再收 chat/canvas 广播），并向余下成员广播
+        ``user_left(reason)``；返回摘除的连接数。
+        """
+        detached = 0
+        for session in list(self.sessions.values()):
+            if session.room_id is None or str(session.room_id) != str(room_id):
+                continue
+            if session.user_id is None:
+                continue
+            if await self.detach_user_from_room(
+                session.user_id, room_id, reason=reason
+            ):
+                detached += 1
+        return detached
+
     async def _cleanup_session(
         self, session: ClientSession, reason: str = "disconnected"
     ) -> None:

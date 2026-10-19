@@ -376,7 +376,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - `disconnected`：WS 连接断开（自动清理）；
 - `left`：WS `leave_room` 或 HTTP `leave` 成功（HTTP 成功后服务端主动摘除该用户 WS 会话）；
 - `kicked`：被房主通过 HTTP `kick` 踢出（同样主动摘除 WS 会话）；
-- `replaced`：同账号新连接顶号，旧连接退出。
+- `replaced`：同账号新连接顶号，旧连接退出；
+- `closed`：房主关闭房间（HTTP DELETE），服务端摘除该房间**所有在线成员**的 WS 会话并广播。
 
 `chat_message`（C）：
 
@@ -440,6 +441,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 | chat_send | 需已进房；限频 5 条/秒/用户（超限 `RATE_LIMITED`）；空/超长（>2000）`INVALID_MESSAGE`；非成员 `NOT_ROOM_MEMBER`；成功后广播 `chat_message` 给房间内所有连接（含发送者），`client_msg_id` 原样回传 |
 | 历史消息 | `GET /api/v1/rooms/{room_id_or_code}/messages?before=&limit=`；`before` 为上一页最后一条消息 id（字符串），`limit` 默认 50/上限 100；需 JWT + 房间成员 |
 | HTTP leave/kick | 成功后服务端摘除该用户在当前房间的 WS 会话（不再收 `chat_message`，在线状态消失），并向余下成员广播 `user_left(reason=left\|kicked)` |
+| HTTP close | 服务端摘除该房间**全部在线成员**的 WS 会话并广播 `user_left(reason=closed)`；之后这些连接发 `chat_send`/`canvas_op` 返回 `NOT_ROOM_MEMBER`（会话已不在房间） |
 | join_room | 要求已认证 + 已是房间成员（HTTP join 过）；非成员 `NOT_ROOM_MEMBER`；房间不存在 `ROOM_NOT_FOUND`；已关闭 `ROOM_CLOSED`；成功回 `room_joined{room,members}`（members 含 `online`） |
 | 离开/断线 | `leave_room` 回 `left_room` 并向房间其他成员广播 `user_left(reason=left)`；断开自动清理并广播 `user_left(reason=disconnected)` |
 | 在线状态 | 由“当前活跃 WS 连接且在该房间”推导，不读数据库；不跨进程 |
@@ -461,9 +463,9 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 {"type":"canvas_op","room_id":"01J8Z9K3Q7","rev":13,"op":{"kind":"clear"}}
 ```
 
-- 前置：已认证、已进房且仍是房间成员（非成员/未进房 `NOT_ROOM_MEMBER`，关房 `ROOM_CLOSED`）；`room_id` 必须与当前频道一致。
+- 前置：已认证、已进房且仍是房间成员（非成员/未进房 `NOT_ROOM_MEMBER`；若关房竞态仍持有会话则 `ROOM_CLOSED`，HTTP 关房成功后会话已摘除，后续为 `NOT_ROOM_MEMBER`）；`room_id` 必须与当前频道一致。
 - 校验：`kind` 为 `stroke|clear`；stroke 的 `points` 非空且 ≤512 点，`x/y` 为 0–1 归一化数值，`color` 为 `#RRGGBB`，`width` 1–32，`tool` 为 `pen|eraser`；否则 `INVALID_CANVAS_OP`。
-- `rev`：每连接每房间独立单调递增；`rev <= 上次` 丢弃并回 `CANVAS_OUT_OF_ORDER`（不更新水位、不广播）。
+- `rev`：每连接每房间独立单调递增；`rev <= 上次` 丢弃并回 `CANVAS_OUT_OF_ORDER`（不更新水位、不广播）。**重连后 rev 从 0 重新计数（连接级、不持久化）**；其他成员对 `rev` 只用于丢弃旧包，不做状态合并，画板状态以快照为准。
 - 限频：30 条/秒/用户，超限 `RATE_LIMITED`，不广播。
 - 通过校验后**不改内容**，广播给房间内其他连接（**不回发送者**）：
   `{"type":"canvas_op","room_id":"...","user_id":"1","rev":12,"op":{...}}`。
@@ -476,14 +478,15 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
  "strokes":[{"kind":"stroke","points":[{"x":0.12,"y":0.5}],"color":"#FF3B30","width":4,"tool":"pen"}]}
 ```
 
-- 所有房间成员可保存；`strokes` ≤5000 条、序列化 ≤512KB、每条按 canvas_op 规则校验（超限 `INVALID_CANVAS_OP`）。
+- 所有房间成员可保存（**后写覆盖，last-writer-wins**，无版本冲突检测）；`strokes` ≤5000 条、序列化 ≤512KB、每条按 canvas_op 规则校验（超限 `INVALID_CANVAS_OP`）。
 - 成功回 `{"type":"canvas_snapshot_saved","room_id":"...","rev":13,"updated_at":1750000000000}`。
-- 落库时机（当前）：仅显式 `canvas_snapshot_save` + 房主关闭房间时服务端 flush 内存累计笔画；**不做 60s/30s 定时快照**（已知限制，重启会丢未保存增量）。
+- **客户端必须在离开房间/关闭应用前先发送 `canvas_snapshot_save`；否则未保存的增量会丢失。**
+- 落库时机（当前）：仅显式 `canvas_snapshot_save` + 房主关闭房间时服务端 flush 内存累计笔画；**不做 60s/30s 定时快照**（已知限制，进程重启会丢未保存增量）。
 - `room_canvas` 表每房间一条 `{strokes, rev, updated_at}`；保留 **7 天**，由 `MessageCleanupTask` 与聊天 30 天清理一起周期执行（`MESSAGE_CLEANUP_INTERVAL_HOURS` 默认 24h，启动先跑一次）。
 
 **HTTP**
 
-`GET /api/v1/rooms/{room_id_or_code}/canvas`（JWT + 成员）：无快照返回 `{"strokes":[],"rev":0,"updated_at":null}`；有快照返回 `{"strokes":[...],"rev":N,"updated_at":毫秒}`。错误沿用 `ROOM_NOT_FOUND`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`，业务码在 `data.error_code`。
+`GET /api/v1/rooms/{room_id_or_code}/canvas`（JWT + 成员）：无快照返回 `{"strokes":[],"rev":0,"updated_at":null}`；有快照返回 `{"strokes":[...],"rev":N,"updated_at":毫秒}`。错误沿用 `ROOM_NOT_FOUND`/`NOT_ROOM_MEMBER`/`ROOM_CLOSED`，业务码在 `data.error_code`。房间关闭后其成员 WS 会话已被摘除，后续 `chat_send`/`canvas_op` 返回 `NOT_ROOM_MEMBER`。
 
 ## 7. 错误码与状态码
 

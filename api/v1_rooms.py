@@ -273,11 +273,20 @@ async def close_room(
     except RoomError as exc:
         _raise_room_error(exc)
 
-    # 关房时把内存中的画板状态落盘（已知限制：只在该时机/显式 save 落库）
+    # 关房时：画板状态落盘 + 摘除该房间所有成员的 WS 会话（含房主）
     try:
-        await _get_websocket_manager().flush_canvas_on_close(room.id)
+        manager = _get_websocket_manager()
     except Exception as exc:  # pragma: no cover - 防御性
-        log_exception(exc, "关房画板快照落盘失败", {"room": room_id_or_code})
+        log_exception(exc, "关房获取 WS 管理器失败", {"room": room_id_or_code})
+    else:
+        try:
+            await manager.flush_canvas_on_close(room.id)
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "关房画板快照落盘失败", {"room": room_id_or_code})
+        try:
+            await manager.detach_room_sessions(room.id, reason="closed")
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "关房摘除 WS 会话失败", {"room": room_id_or_code})
 
     return ok({"closed": True}, request=request)
 
