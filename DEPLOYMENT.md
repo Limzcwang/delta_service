@@ -17,7 +17,7 @@
 | 代码检出 | `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683`（v4.2.2，固定 SHA） |
 | 构建 | `docker build -t delta-service .`（基础镜像先尝试从腾讯云镜像预拉） |
 | 冒烟 | 用同一 `db.env` 起临时容器 `delta-service-smoke`（宿主 18000→容器 8000），轮询 `/docs` 最多 30×2s |
-| 部署 | `docker rm -f delta-service-container` 后 `docker run -d --name delta-service-container -p 8000:8000 --restart unless-stopped --env-file /etc/delta-service/db.env -e FORWARDED_ALLOW_IPS=172.17.0.1 delta-service` |
+| 部署 | `docker rm -f delta-service-container` 后 `docker run -d --name delta-service-container -p 8000:8000 -v /root/datasets:/data/datasets --restart unless-stopped --env-file /etc/delta-service/db.env -e FORWARDED_ALLOW_IPS=172.17.0.1 delta-service` |
 | 健康检查 | 轮询 `http://127.0.0.1:8000/health` 最多 30×2s，非 200 则打印容器日志并失败 |
 
 流水线步骤与 `deploy.yml` 的对应关系：
@@ -207,8 +207,9 @@ docker rm -f delta-service-smoke 2>/dev/null || true
 docker run -d --name delta-service-smoke -p 18000:8000 --env-file /etc/delta-service/db.env delta-service
 # 轮询 http://127.0.0.1:18000/docs 直到 200（最多约 60s），失败则失败退出
 docker rm -f delta-service-container 2>/dev/null || true
+mkdir -p /root/datasets   # 数据集落盘目录（容器内 /data/datasets）
 docker run -d --name delta-service-container \
-  -p 8000:8000 --restart unless-stopped \
+  -p 8000:8000 -v /root/datasets:/data/datasets --restart unless-stopped \
   --env-file /etc/delta-service/db.env \
   -e FORWARDED_ALLOW_IPS=172.17.0.1 delta-service
 # 轮询 http://127.0.0.1:8000/health 直到 200
@@ -323,6 +324,8 @@ curl -fsS https://deltachat.icu:8443/api/v1/config/operators |   python -c 'impo
 # 容器重启（改 operators.json 后必须）
 docker restart delta-service-container
 ```
+
+**内部数据集（仅测试）**：容器挂载宿主机 `/root/datasets` → 容器 `/data/datasets`；首次上线可执行幂等建表 `docker run --rm --env-file /etc/delta-service/db.env delta-service python scripts/migrate_dataset.py`。清理默认保留 30 天：`python scripts/purge_dataset.py --before-days 30 --purge-db`（先 `--dry-run`）。只存 HUD/头像裁剪与元数据，不含聊天/全屏截图。
 
 **备份（待办）**：当前未配置自动备份。上线后需补 MySQL 定时备份（`mysqldump` + 加密/Object Storage）与恢复演练；聊天/画板/技能数据依赖 MySQL。
 

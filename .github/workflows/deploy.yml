@@ -80,6 +80,7 @@ jobs:
           docker run -d \
             --name delta-service-container \
             -p 8000:8000 \
+            -v /root/datasets:/data/datasets \
             --restart unless-stopped \
             --env-file "$DB_ENV_FILE" \
             -e FORWARDED_ALLOW_IPS=172.17.0.1 \

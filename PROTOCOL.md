@@ -244,6 +244,55 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 限频均为单进程内存滑动窗口，重启清零；多实例部署需外部共享限频。
 
+### 3.4 内部数据集采集（仅测试白名单，不面向线上）
+
+内部收集测试用户的 HUD 技能/头像裁剪样本，用于后续识别调优；**不进入普通客户端功能**。
+
+**认证/权限**
+
+- `POST /api/v1/dataset/samples`、`GET /api/v1/dataset/status`：JWT 且 username 在
+  `DATASET_UPLOADERS`（逗号分隔，默认 `DeltaQA01,DeltaQA02`）；否则 403
+  `DATASET_FORBIDDEN`。采集关闭（`DATASET_ENABLED=false`）时上传返回 503
+  `DATASET_DISABLED`。
+- `GET /api/v1/dataset/samples?date=YYYYMMDD`：仅 `DATASET_ADMINS`（默认 `admin`）。
+
+**上传（multipart/form-data）**
+
+| 字段 | 说明 |
+|---|---|
+| `meta` | JSON 字符串（≤64KB） |
+| `slots.png` | 可选，HUD 槽位裁剪图，≤2MB |
+| `avatar.png` | 可选，头像裁剪图，≤2MB |
+
+`meta` 字段（全部必填，`squad_number` 可为空）：
+
+```json
+{"room_code":"A1B2C","operator_id":"haizhua","resolution":"2560x1440",
+ "hud_scale":1.25,"captured_at":1792400000000,
+ "ocr":["大招 12s","技能 就绪","投掷物 2"],"squad_number":2,"client_version":"0.1.4"}
+```
+
+- `operator_id`/`resolution`/`client_version`/`room_code` ≤32/32/32/16 字符；
+  `hud_scale` 正数；`captured_at` 非负毫秒；`ocr` ≤10 项、每项 ≤64 字符；
+  `squad_number` 仅 1/2/3 或空。
+- 单文件 ≤2MB、总请求 ≤4MB（超限 413 `DATASET_FILE_TOO_LARGE`）；非法 meta 400
+  `INVALID_DATASET_META`；每用户每天配额默认 500（`DATASET_DAILY_QUOTA`），超限 429
+  `DATASET_QUOTA_EXCEEDED`。
+- 落盘：`${DATASET_DIR:-/data/datasets}/<YYYYMMDD>/<uuid>/{slots.png,avatar.png,meta.json}`；
+  DB `dataset_samples` 记录计数/索引。响应含 `sample_id/date_key/files/path/quota_remaining`。
+
+**查询**
+
+- `GET /api/v1/dataset/status` → `{enabled,date_key,today_count,quota,remaining}`。
+- `GET /api/v1/dataset/samples?date=` → `{date_key,items:[...],total}`，管理员用。
+
+**保留/隐私**
+
+- 默认保留 **30 天**，用 `python scripts/purge_dataset.py --before-days 30` 手动清理
+  （`--dry-run` 预览；`--purge-db` 同时删 DB 记录）。
+- 只保存 HUD/头像裁剪图与元数据，**不含聊天内容或全屏截图**；目录只挂载在部署机
+  `/root/datasets`。
+
 ## 4. 房间语义
 
 | 项 | 约定 |
@@ -671,6 +720,12 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `INVALID_CANVAS_OP` | 400 | 40000 |
 | `INVALID_SKILL_PAYLOAD` | 400 | 40000 |
 | `CONFIG_UNAVAILABLE` | 503 | 50300 |
+| `DATASET_FORBIDDEN` | 403 | 40300 |
+| `INVALID_DATASET_META` | 400 | 40000 |
+| `INVALID_DATASET_DATE` | 400 | 40000 |
+| `DATASET_FILE_TOO_LARGE` | 413 | 41300 |
+| `DATASET_QUOTA_EXCEEDED` | 429 | 42900 |
+| `DATASET_DISABLED` | 503 | 50300 |
 | `ROOM_FORBIDDEN` | 403 | 40300 |
 | `INVALID_USERNAME` / `INVALID_NICKNAME` / `WRONG_OLD_PASSWORD` / `INVALID_NEW_PASSWORD` | 400 | 40000 |
 | `ROOM_CODE_GENERATION_FAILED` | 500 | 50000 |

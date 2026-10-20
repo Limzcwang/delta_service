@@ -118,6 +118,7 @@ def install_tortoise_stub():
         "IntField",
         "SmallIntField",
         "TinyIntField",
+        "BigIntField",
         "CharField",
         "DatetimeField",
         "BooleanField",
@@ -208,6 +209,10 @@ def install_fastapi_stub():
     class StubWebSocketDisconnect(Exception):
         pass
 
+    class StubUploadFile:
+        async def read(self, *args, **kwargs):
+            return b""
+
     _replace_module(
         "fastapi",
         APIRouter=_StubRouter,
@@ -217,6 +222,9 @@ def install_fastapi_stub():
         WebSocketDisconnect=StubWebSocketDisconnect,
         Depends=lambda dependency: dependency,
         Response=FakeResponse,
+        UploadFile=StubUploadFile,
+        File=lambda default=None, **kwargs: default,
+        Form=lambda default=..., **kwargs: default,
         status=_StubStatus,
     )
     # v1 统一响应包会用到 fastapi.responses.JSONResponse

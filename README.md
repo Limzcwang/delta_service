@@ -83,6 +83,11 @@ Desktop Client ──HTTPS 8443──▶ Caddy ──HTTP 127.0.0.1:8000──�
 | `MESSAGE_CLEANUP_INTERVAL_HOURS` | ❌ | `24` | 聊天 30 天 + 画板 7 天清理周期 |
 | `OPERATORS_CONFIG_PATH` | ❌ | `assets/operators.json` | 配置中心文件路径 |
 | `BACKGROUNDS_MANIFEST_PATH` | ❌ | `assets/backgrounds/manifest.json` | 底图 manifest 路径 |
+| `DATASET_ENABLED` | ❌ | `true` | 内部数据集采集开关 |
+| `DATASET_UPLOADERS` | ❌ | `DeltaQA01,DeltaQA02` | 允许上传的数据集测试账号（逗号分隔） |
+| `DATASET_ADMINS` | ❌ | `admin` | 可查询数据集样本的管理员账号 |
+| `DATASET_DIR` | ❌ | `/data/datasets` | 数据集落盘根目录（生产挂载 `/root/datasets`） |
+| `DATASET_DAILY_QUOTA` | ❌ | `500` | 每用户每日上传配额 |
 
 `DB_*` 缺失时进程启动失败；`JWT_SECRET` 缺失时登录/注册/WS 认证会失败（HTTP 500/401）。
 
@@ -163,6 +168,12 @@ docker run --rm -p 8000:8000 --env-file ./db.env \
 - 版本 = `assets/operators.json` 内容 sha256 前 16 位；响应头 `ETag`/`Cache-Control: public, max-age=60`；`If-None-Match` 匹配 304。
 - 当前内置 **17 干员**；空/非法配置返回 **503 `CONFIG_UNAVAILABLE`**，绝不下发空列表。
 - 改配置后重启容器生效（不做热加载）。
+
+### 内部数据集采集（仅测试白名单）
+- `POST /api/v1/dataset/samples`：JWT+`DATASET_UPLOADERS` 白名单，multipart `meta` + 可选 `slots.png`/`avatar.png`；单文件 ≤2MB、总请求 ≤4MB、每人每天 ≤500。
+- 落盘 `${DATASET_DIR}/<YYYYMMDD>/<uuid>/{slots.png,avatar.png,meta.json}`，DB `dataset_samples` 记录；只含 HUD/头像裁剪与元数据，**不含聊天/全屏截图**。
+- `GET /dataset/status` 白名单查看今日配额；`GET /dataset/samples?date=` 仅 `DATASET_ADMINS`。
+- 默认保留 30 天，手动 `python scripts/purge_dataset.py --before-days 30`；建表可跑 `scripts/migrate_dataset.py`（幂等）。
 
 ### 后台任务
 - 聊天消息 30 天清理 + 画板快照 7 天清理，`MessageCleanupTask` 随应用 lifespan 启动（默认 24h，启动先跑一次）。
