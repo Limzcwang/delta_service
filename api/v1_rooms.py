@@ -277,10 +277,13 @@ async def get_room_skills(
 ):
     """JWT + 房间成员；返回未 stale 的技能共享状态。"""
     try:
-        room, _members = await rooms_service.get_room_for_member(
+        room, members = await rooms_service.get_room_for_member(
             room_id_or_code, user
         )
         items = await skills_service.list_states(room.id)
+        items = skills_service.filter_states_by_members(
+            items, [member.get("id") for member in members]
+        )
     except RoomError as exc:
         _raise_room_error(exc)
 

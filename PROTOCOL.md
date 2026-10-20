@@ -582,9 +582,9 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
   - 折算为负 → 0。
 - 下发的 `skills[].remaining_ms` 是**服务端收到时刻**的剩余量，`ready_at` 为绝对时刻；客户端渲染倒计时用 `ready_at - server_now`（不要再用 captured_at 自行折算）。
 - `captured_at` 原样保留用于审计；`server_received_at` 为本次服务端收到时间；二者均为毫秒。
-- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at`、`skills[].ready_at` 和可选 `squad_number`（None 时省略）。
+- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at`、`skills[].ready_at` 和可选 `squad_number`（None 时省略）；两者都只返回**当前成员**的状态，残留行（HTTP 离开未走 WS 清理等）会被过滤，空结果返回 `[]`。
 
-**新成员**：`room_joined.skill_states` 为当前房间所有人最新状态的数组（结构同上，stale 已过滤）。
+**新成员**：`room_joined.skill_states` 为当前房间**仍在成员列表**的用户最新状态数组（结构同上，stale 已过滤；已离开/被踢的残留行不返回）。
 
 **C→S `skill_share_off`**：删除该用户状态，并向房间内所有人广播 `{"type":"skill_share_removed","user_id":"1"}`。
 

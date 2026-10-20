@@ -411,6 +411,10 @@ class WebSocketManager:
             state = {"strokes": [], "rev": 0}
         try:
             skill_states = await skills_service.list_states(room.id)
+            # 只下发给当前仍在房间的成员；过滤 HTTP 离开/崩溃遗留的残留状态
+            skill_states = skills_service.filter_states_by_members(
+                skill_states, [member.get("id") for member in members]
+            )
         except Exception as exc:  # pragma: no cover - DB 异常降级为空
             log_exception(exc, "加载技能共享状态失败", {"room": room.id})
             skill_states = []

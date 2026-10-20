@@ -114,7 +114,7 @@ python scripts/migrate_f.py
 python -m unittest discover -s tests -v
 ```
 
-测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 418 个用例。
+测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 422 个用例。
 
 ### Docker 本地运行
 
@@ -156,7 +156,7 @@ docker run --rm -p 8000:8000 --env-file ./db.env \
 - 服务端权威折算：`adjusted=max(0, remaining_ms-(now-captured_at))`，`ready_at=now+adjusted`（服务器时钟绝对毫秒）；`captured_at` 未来不放大、>10s 视为过期、负值归零。
 - 广播 `skill_share_state`（含发送者）与 `room_joined.skill_states`；`GET /rooms/{id_or_code}/skills`；`skill_share_off` → `skill_share_removed`。
 - 可选 `squad_number`（1/2/3，允许重复）随状态存储/下发；非法值忽略、不拒绝 payload；旧客户端不带该字段时为 NULL。
-- 状态 30 分钟 stale 过滤；关房/软删清理；leave/kick 即使无 WS 连接也在 DB 删除。
+- 状态 30 分钟 stale 过滤；关房/软删清理；leave/kick 即使无 WS 连接也在 DB 删除；`room_joined.skill_states`/GET 只返回当前成员，残留行过滤、空结果返回 `[]`。
 
 ### 配置中心 / 运营
 - `GET /api/v1/config/operators`：**公开**，按 IP 限频（默认 60/分）；返回 `{version,etag,updated_at,operators,meta}`。

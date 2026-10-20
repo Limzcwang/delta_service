@@ -97,20 +97,20 @@ class HttpCleanupWithoutSessionTests(unittest.IsolatedAsyncioTestCase):
         self.alice = make_user(1, "alice", "Alice")
         self.bob = make_user(2, "bob", "Bob")
 
-    async def _get_skills(self):
+    async def _get_skills(self, members=None):
         with mock.patch.object(
             v1_rooms.rooms_service,
             "get_room_for_member",
-            new=mock.AsyncMock(return_value=(self.room, [])),
+            new=mock.AsyncMock(return_value=(self.room, members or [])),
         ):
             return await v1_rooms.get_room_skills(
                 DummyRequest(), self.room.code, self.alice
             )
 
-    async def _room_joined_skill_states(self):
+    async def _room_joined_skill_states(self, members=None):
         websocket = FakeWebSocket()
         session = manager_module.ClientSession(websocket=websocket)
-        await self.manager._send_room_joined(session, self.room, [])
+        await self.manager._send_room_joined(session, self.room, members or [])
         return websocket.messages("room_joined")[0]["skill_states"]
 
     async def test_http_leave_without_session_deletes_state(self):
@@ -136,6 +136,34 @@ class HttpCleanupWithoutSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"items": []}, (await self._get_skills())["data"])
         self.assertEqual([], await self._room_joined_skill_states())
 
+    async def test_http_leave_residual_state_filtered_from_views(self):
+        self.dao.seed(self.room.id, self.alice)
+        self.dao.seed(self.room.id, self.bob)
+        # 模拟 HTTP 离开但 DB 清理失败/未生效的残留行
+        with mock.patch.object(
+            v1_rooms.rooms_service,
+            "leave_room",
+            new=mock.AsyncMock(return_value=True),
+        ), mock.patch.object(
+            v1_rooms.rooms_service,
+            "resolve_room",
+            new=mock.AsyncMock(return_value=self.room),
+        ), mock.patch.object(
+            v1_rooms.skills_service,
+            "remove_state",
+            new=mock.AsyncMock(return_value=0),
+        ), mock.patch.object(
+            v1_rooms, "_get_websocket_manager", return_value=self.manager
+        ):
+            await v1_rooms.leave_room(DummyRequest(), self.room.code, self.bob)
+        self.assertIn((self.room.id, 2), self.dao.records)
+
+        members = [{"id": "1", "nickname": "Alice"}]
+        items = (await self._get_skills(members))["data"]["items"]
+        self.assertEqual(["1"], [item["user_id"] for item in items])
+        states = await self._room_joined_skill_states(members)
+        self.assertEqual(["1"], [item["user_id"] for item in states])
+
     async def test_http_kick_without_session_deletes_only_target_state(self):
         self.dao.seed(self.room.id, self.alice)
         self.dao.seed(self.room.id, self.bob)
@@ -160,9 +188,10 @@ class HttpCleanupWithoutSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn((self.room.id, 1), self.dao.records)
         self.assertNotIn((self.room.id, 2), self.dao.records)
-        items = (await self._get_skills())["data"]["items"]
+        members = [{"id": "1", "nickname": "Alice"}]
+        items = (await self._get_skills(members))["data"]["items"]
         self.assertEqual(["1"], [item["user_id"] for item in items])
-        states = await self._room_joined_skill_states()
+        states = await self._room_joined_skill_states(members)
         self.assertEqual(["1"], [item["user_id"] for item in states])
 
     async def test_http_kick_with_session_still_detaches_and_cleans(self):
