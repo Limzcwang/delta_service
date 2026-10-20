@@ -64,6 +64,7 @@ def state_payload(user_id="1", nickname="Alice"):
         "skills": skills,
         "captured_at": 1792400000000,
         "server_received_at": 1792400000002,
+        "squad_number": 1,
         "updated_at": 1792400000001,
     }
 
@@ -123,6 +124,7 @@ class SkillUpdateTests(WsSkillTestCase):
             self.assertEqual(3, len(event["skills"]))
             self.assertEqual(1792400000000, event["captured_at"])
             self.assertEqual(1792400000002, event["server_received_at"])
+            self.assertEqual(1, event["squad_number"])
             self.assertEqual(1792400000001, event["updated_at"])
             self.assertEqual(1792400004500, event["skills"][0]["ready_at"])
 
@@ -139,6 +141,19 @@ class SkillUpdateTests(WsSkillTestCase):
                     {"INVALID_SKILL_PAYLOAD", "NOT_ROOM_MEMBER"},
                 )
         self.assertEqual([], self.bob_ws.messages("skill_share_state"))
+
+    async def test_invalid_squad_number_ignored_payload_still_succeeds(self):
+        with mock.patch.object(
+            manager_module.skills_service,
+            "save_state",
+            new=mock.AsyncMock(return_value=state_payload()),
+        ) as save_state:
+            await self._send(
+                self.alice_session, skill_payload(squad_number=9)
+            )
+        save_state.assert_awaited_once()
+        self.assertEqual([], self.alice_ws.messages("error"))
+        self.assertTrue(self.bob_ws.messages("skill_share_state"))
 
     async def test_rate_limit_two_per_second(self):
         with mock.patch.object(

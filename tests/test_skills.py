@@ -53,11 +53,12 @@ def make_payload(**overrides):
     return payload
 
 
-def make_record(user=None, data=None, updated_at=NOW):
+def make_record(user=None, data=None, updated_at=NOW, squad_number=None):
     return SimpleNamespace(
         user=user or make_user(),
         data=data if data is not None else skills_service.validate_skill_payload(make_payload()),
         updated_at=updated_at,
+        squad_number=squad_number,
     )
 
 
@@ -69,6 +70,32 @@ class SkillValidationTests(unittest.TestCase):
         self.assertEqual(1792400000000, data["captured_at"])
         self.assertEqual(30, data["skills"][0]["pct"])
         self.assertNotIn("pct", data["skills"][1])
+
+    def test_squad_number_valid_values(self):
+        for value in (1, 2, 3):
+            with self.subTest(value=value):
+                data = skills_service.validate_skill_payload(
+                    make_payload(squad_number=value)
+                )
+                self.assertEqual(value, data["squad_number"])
+
+    def test_squad_number_invalid_values_ignored(self):
+        for value in (0, 4, 9, "2", 2.5, True, -1):
+            with self.subTest(value=value):
+                data = skills_service.validate_skill_payload(
+                    make_payload(squad_number=value)
+                )
+                self.assertIsNone(data["squad_number"])
+
+    def test_squad_number_none_or_omitted(self):
+        payload = make_payload()
+        payload.pop("squad_number", None)
+        self.assertIsNone(skills_service.validate_skill_payload(payload)["squad_number"])
+        self.assertIsNone(
+            skills_service.validate_skill_payload(
+                make_payload(squad_number=None)
+            )["squad_number"]
+        )
 
     def test_invalid_payloads(self):
         base = make_payload()
@@ -126,13 +153,16 @@ class FakeSkillDao:
         self.cleared = []
         self.record = None
 
-    async def upsert(self, room, user, data):
-        self.upserts.append((room.id, user.id, data))
+    async def upsert(self, room, user, data, squad_number=None):
+        self.upserts.append((room.id, user.id, data, squad_number))
         if self.record is None:
-            self.record = make_record(user=user, data=data)
+            self.record = make_record(
+                user=user, data=data, squad_number=squad_number
+            )
             self.records.append(self.record)
         else:
             self.record.data = data
+            self.record.squad_number = squad_number
         return self.record
 
     async def list_for_room(self, room_id):
@@ -163,10 +193,30 @@ class SkillStateServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.dao.upserts))
         self.assertEqual("room-1", self.dao.upserts[0][0])
         self.assertEqual("op-1", self.dao.upserts[0][2]["operator_id"])
+        self.assertIsNone(self.dao.upserts[0][3])
         self.assertEqual("1", state["user_id"])
         self.assertEqual("Alice", state["nickname"])
         self.assertEqual(3, len(state["skills"]))
         self.assertEqual(int(NOW.timestamp() * 1000), state["updated_at"])
+
+    async def test_squad_number_stored_and_serialized(self):
+        state = await skills_service.save_state(
+            self.room, self.user, make_payload(squad_number=2)
+        )
+        self.assertEqual(2, self.dao.upserts[0][3])
+        self.assertEqual(2, state["squad_number"])
+        listed = await skills_service.list_states("room-1", now=NOW)
+        self.assertEqual(2, listed[0]["squad_number"])
+
+    async def test_squad_number_duplicate_users_allowed(self):
+        for user_id in (1, 2):
+            dao = FakeSkillDao()
+            with mock.patch.object(skills_service, "SkillStateDao", dao):
+                state = await skills_service.save_state(
+                    self.room, make_user(user_id), make_payload(squad_number=2)
+                )
+            self.assertEqual(2, state["squad_number"])
+            self.assertEqual(2, dao.upserts[0][3])
 
     async def test_server_folds_network_delay(self):
         now = 1792400001000

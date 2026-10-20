@@ -14,6 +14,8 @@ class RoomSkillState(models.Model):
     room = fields.ForeignKeyField("models.Room", related_name="skill_states")
     user = fields.ForeignKeyField("models.User", related_name="skill_states")
     data = fields.JSONField()
+    # 队伍编号（1/2/3，允许重复；旧客户端可能为 NULL）
+    squad_number = fields.SmallIntField(null=True)
     updated_at = fields.DatetimeField(auto_now=True)
 
     class Meta:
@@ -37,12 +39,17 @@ class SkillStateDao:
         )
 
     @staticmethod
-    async def upsert(room, user, data: dict) -> RoomSkillState:
+    async def upsert(room, user, data: dict, squad_number=None) -> RoomSkillState:
         record = await SkillStateDao.get(str(room.id), int(user.id))
         if record is None:
-            return await RoomSkillState.create(room=room, user=user, data=data)
+            return await RoomSkillState.create(
+                room=room, user=user, data=data, squad_number=squad_number
+            )
         record.data = data
-        await record.save(update_fields=["data", "updated_at"])
+        record.squad_number = squad_number
+        await record.save(
+            update_fields=["data", "squad_number", "updated_at"]
+        )
         return record
 
     @staticmethod
