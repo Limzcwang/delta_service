@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from dao.skill import SkillStateDao
+from log.logger import logger
 
 SLOT_ULTIMATE = 0
 SLOT_SKILL = 1
@@ -17,6 +18,7 @@ MAX_REMAINING_MS = 600000
 MAX_CHARGES = 9
 MAX_PERCENT = 100
 MAX_OPERATOR_LENGTH = 32
+VALID_SQUAD_NUMBERS = (1, 2, 3)
 STALE_AFTER_SECONDS = 30 * 60
 STALE_CAPTURE_MS = 10_000  # captured_at 超过 10 秒视为过期状态
 
@@ -37,6 +39,16 @@ def _invalid(message: str):
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _normalize_squad_number(value: Any) -> Optional[int]:
+    """只接受 1/2/3 的 int；非法值忽略（不拒绝整条 payload）。"""
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool) and value in VALID_SQUAD_NUMBERS:
+        return value
+    logger.debug("忽略非法 squad_number: %r", value)
+    return None
 
 
 def validate_skill_payload(payload: Any) -> Dict[str, Any]:
@@ -103,6 +115,7 @@ def validate_skill_payload(payload: Any) -> Dict[str, Any]:
         "operator_name": operator_name,
         "skills": normalized,
         "captured_at": captured_at,
+        "squad_number": _normalize_squad_number(payload.get("squad_number")),
     }
 
 
@@ -115,7 +128,7 @@ def _dt_to_ms(value: Optional[datetime]) -> Optional[int]:
 def state_to_dict(record) -> Dict[str, Any]:
     user = getattr(record, "user", None)
     data = getattr(record, "data", None) or {}
-    return {
+    payload = {
         "user_id": str(getattr(user, "id", "")),
         "nickname": getattr(user, "nickname", None) or "",
         "operator_id": data.get("operator_id", ""),
@@ -127,6 +140,10 @@ def state_to_dict(record) -> Dict[str, Any]:
         else _dt_to_ms(getattr(record, "updated_at", None)),
         "updated_at": _dt_to_ms(getattr(record, "updated_at", None)),
     }
+    squad_number = getattr(record, "squad_number", None)
+    if squad_number is not None:
+        payload["squad_number"] = squad_number
+    return payload
 
 
 def is_stale(record, now: Optional[datetime] = None) -> bool:
@@ -171,7 +188,10 @@ async def save_state(
         data["skills"], now_ms, int(data["captured_at"])
     )
     data["server_received_at"] = now_ms
-    record = await SkillStateDao.upsert(room, user, data)
+    squad_number = data.pop("squad_number", None)
+    record = await SkillStateDao.upsert(
+        room, user, data, squad_number=squad_number
+    )
     return state_to_dict(record)
 
 

@@ -701,10 +701,25 @@ class MigrationScriptTests(unittest.TestCase):
         self.assertEqual(0, stats2["nickname_added"])
         self.assertEqual(0, stats2["deleted_added"])
 
+        # E1：技能表已存在但缺 squad_number → 幂等补列
+        connection4 = FakeConnection(
+            existing={("users", "nickname"), ("rooms", "deleted")},
+            tables=("users", "rooms", "room_skill_states"),
+        )
+        stats4 = migration.migrate(connection4)
+        self.assertEqual(1, stats4["squad_number_added"])
+        alters4 = [
+            sql
+            for sql, _ in connection4.cursor_obj.executed
+            if sql.startswith("ALTER")
+        ]
+        self.assertEqual(1, len(alters4))
+        self.assertIn("squad_number", alters4[0])
+
         # 空库（应用还未 generate_schemas）：安全跳过，不 ALTER 不 UPDATE
         connection3 = FakeConnection(existing=set(), tables=())
         stats3 = migration.migrate(connection3)
-        self.assertEqual(2, stats3["skipped_missing_tables"])
+        self.assertEqual(3, stats3["skipped_missing_tables"])
         self.assertEqual(0, stats3["nickname_added"])
         self.assertEqual(0, stats3["deleted_added"])
         self.assertEqual(

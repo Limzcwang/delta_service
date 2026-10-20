@@ -1,4 +1,4 @@
-"""F 里程碑幂等迁移：users.nickname + rooms.deleted。
+"""F/E 里程碑幂等迁移：users.nickname + rooms.deleted + skill squad_number。
 
 生产库是已有表，``Tortoise.generate_schemas()`` 不会补列，因此需要本脚本。
 可重复执行：列存在则跳过 ADD；回填只处理空 nickname。
@@ -49,6 +49,7 @@ def migrate(connection: Any) -> Dict[str, int]:
         "nickname_added": 0,
         "nickname_backfilled": 0,
         "deleted_added": 0,
+        "squad_number_added": 0,
         "skipped_missing_tables": 0,
     }
     cursor = connection.cursor()
@@ -79,6 +80,17 @@ def migrate(connection: Any) -> Dict[str, int]:
                     "NOT NULL DEFAULT 0"
                 )
                 stats["deleted_added"] = 1
+
+        # E1 扩展：技能共享队伍编号（1/2/3 或 NULL，允许重复）
+        if not _table_exists(cursor, "room_skill_states"):
+            stats["skipped_missing_tables"] += 1
+        else:
+            if not _column_exists(cursor, "room_skill_states", "squad_number"):
+                cursor.execute(
+                    "ALTER TABLE room_skill_states ADD COLUMN "
+                    "squad_number TINYINT NULL"
+                )
+                stats["squad_number_added"] = 1
 
         connection.commit()
     except Exception:

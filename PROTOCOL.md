@@ -555,11 +555,13 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
    {"slot":0,"state":"charging","remaining_ms":12000,"charges":0,"max_charges":1,"pct":30},
    {"slot":1,"state":"ready","remaining_ms":0,"charges":2,"max_charges":2},
    {"slot":2,"state":"unknown","remaining_ms":0,"charges":1,"max_charges":1}],
+ "squad_number":2,
  "captured_at":1750000000123}
 ```
 
 - 已认证 + 已进房且仍是成员；`room_id` 必须与当前频道一致。
 - 校验：`skills` 恰好 3 条且 `slot` 为 0/1/2 不重复；`state` ∈ ready/charging/unknown；`remaining_ms` 0–600000；`max_charges` 1–9；`charges` 0–max_charges；`pct` 可选 0–100；`operator_id`/`operator_name` ≤32 字符；`captured_at` 非负毫秒。非法 → `INVALID_SKILL_PAYLOAD`。
+- 可选 `squad_number`：队伍编号，只接受 **int 1/2/3**；其他值（0/4+/字符串/浮点/bool）**忽略该字段**，整条 payload 仍成功。**允许重复**，不做唯一/去重校验；省略或非法时按无编号处理。
 - 限频 **2 条/秒/用户**，超限 `RATE_LIMITED`（不落库、不广播）。
 
 **S→房间 `skill_share_state`**（所有房间连接，含发送者）：
@@ -569,6 +571,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
  "skills":[
    {"slot":0,"state":"charging","remaining_ms":4500,"ready_at":1750000004500,"charges":0,"max_charges":1,"pct":30}
  ],
+ "squad_number":2,
  "captured_at":1750000000123,"server_received_at":1750000001623,"updated_at":1750000001700}
 ```
 
@@ -579,7 +582,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
   - 折算为负 → 0。
 - 下发的 `skills[].remaining_ms` 是**服务端收到时刻**的剩余量，`ready_at` 为绝对时刻；客户端渲染倒计时用 `ready_at - server_now`（不要再用 captured_at 自行折算）。
 - `captured_at` 原样保留用于审计；`server_received_at` 为本次服务端收到时间；二者均为毫秒。
-- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at` 与 `skills[].ready_at`。
+- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at`、`skills[].ready_at` 和可选 `squad_number`（None 时省略）。
 
 **新成员**：`room_joined.skill_states` 为当前房间所有人最新状态的数组（结构同上，stale 已过滤）。
 
