@@ -187,7 +187,8 @@ done
    ```bash
    docker run --rm --env-file /etc/delta-service/db.env delta-service python scripts/migrate_f.py
    ```
-9. 部署后建议人工执行一次 `bash /root/delta-deploy.sh --check`（如脚本支持）或仓库内的 `check_deployment.sh` 做巡检。
+9. 部署后建议人工执行一次 `bash /root/delta-deploy.sh --check`（如脚本支持）或仓库内的 `check_deployment.sh` 做巡检；
+10. 若干员配置 `assets/operators.json` 有更新，执行 `docker restart delta-service-container`（**不做热加载**），再验证 `GET /api/v1/config/operators` 的 `version` 已变化。
 
 ## 4. 手动兜底（不依赖 runner）
 
@@ -223,6 +224,9 @@ docker run --rm --env-file /etc/delta-service/db.env delta-service python script
 - 任何情况下都不要把 `DB_PASSWORD` 直接写在命令行（会进 shell history/进程列表），统一用 `--env-file`。
 
 ## 5. 回滚
+
+> 注意：`scripts/migrate_f.py` 添加的 `users.nickname` / `rooms.deleted` 为**向前迁移**；回滚代码无需回滚列（旧代码会忽略新列），但不要把数据库回滚到更早快照以免丢新数据。
+
 
 ### 5.1 镜像/容器回滚（推荐先做）
 
@@ -309,6 +313,18 @@ docker logs --since 5m delta-service-container 2>&1 | grep -E 'client_ip|登录|
 若日志里出现 `172.17.0.1`，检查 `FORWARDED_ALLOW_IPS` 是否传入容器、Caddy 是否设置 `X-Forwarded-For`。
 
 
+
+**配置中心 / 运维检查**：
+
+```bash
+# 配置中心版本/干员数（应为 17，version 随文件内容变化）
+curl -fsS https://deltachat.icu:8443/api/v1/config/operators |   python -c 'import json,sys; d=json.load(sys.stdin); print(d["version"], len(d["operators"]), d["meta"].get("season"))'
+
+# 容器重启（改 operators.json 后必须）
+docker restart delta-service-container
+```
+
+**备份（待办）**：当前未配置自动备份。上线后需补 MySQL 定时备份（`mysqldump` + 加密/Object Storage）与恢复演练；聊天/画板/技能数据依赖 MySQL。
 
 仓库内的 `check_deployment.sh` 是**手动诊断脚本**（不是 CI 步骤），检查：容器存在/状态/启动时间、8000 监听、`/docs` 200、容器日志中的 error、`docker stats`。用法：
 
