@@ -229,6 +229,21 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 ---
 
+### 3.3 认证与限频汇总
+
+| 范围 | 规则 |
+|---|---|
+| HTTP 鉴权 | `/api/v1/**` 除 `auth/login`、`auth/register`、`config/operators` 外均需 `Authorization: Bearer <JWT>` |
+| 登录 | **5 次/分钟/IP**（`LOGIN_RATE_LIMIT_PER_MIN`），超限 429 `RATE_LIMITED` |
+| 注册 | 无独立限频（沿用登录入口防护建议；生产可加网关限频） |
+| 配置中心 | **60 次/分钟/IP**（`CONFIG_RATE_LIMIT_PER_MIN`），超限 429 |
+| WS 聊天 | **5 条/秒/用户** |
+| WS 画板 | **30 条/秒/用户** |
+| WS 技能共享 | **2 条/秒/用户** |
+| 历史/列表分页 | 消息 `limit` 默认 50、最大 100；房间/我的房间等见各接口 |
+
+限频均为单进程内存滑动窗口，重启清零；多实例部署需外部共享限频。
+
 ## 4. 房间语义
 
 | 项 | 约定 |
@@ -351,6 +366,7 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 | `room_updated` | 房主修改 name/password 后广播 `{room_id,name,visibility,has_password}` |
 | `room_deleted` | 房间软删后广播给在线成员，随后会话被摘除 |
 | `room_kicked` | 踢人成功、摘除会话前**定向**发送给被踢者 |
+| `left_room` | WS `leave_room` 的确认（`room_id`/`room_code`；不在房间时为 null） |
 | `chat_message` | 聊天消息（C） |
 | `canvas_op` | 画板增量广播（D，不含发送者，附 user_id/rev） |
 | `canvas_snapshot_saved` | 画板快照保存确认（D） |
@@ -658,52 +674,30 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 
 成功响应的 `data` 为业务数据；错误响应 `data={"error_code":"..."}`，客户端按该字符串分支（如弹房间密码框）。
 
-## 8. 技能共享（里程碑 E，实际协议以 §6.8/E1 为准；本章为早期设计背景）
+## 8. 技能共享（里程碑 E）
 
-| 项 | 约定 |
-|---|---|
-| 数据来源 | **全部在客户端本地完成**屏幕采集与技能识别；服务端只接收结构化快照，**不接收任何图像/截图/二进制** |
-| 上报频率 | 每 **1–2 秒**一次全量快照（不是增量） |
-| 服务端限频 | 建议每人 **2 次/秒**（超出丢弃，必要时回 `RATE_LIMITED`；不因超频断开连接） |
-| 广播范围 | 仅房间内成员；发送者自己也会收到回显（便于确认） |
-| 保留策略 | 服务端按 `(room_id, user_id)` 保留**最近一份**；新成员加入时通过 `room_joined.skill_states` 或 `GET /skills` 拉取（实际字段以 §6.8 为准） |
-| 离开房间 | 删除该房间内该用户的技能状态 |
-| 载荷上限 | `skills` ≤ 64 项，单条 `name` ≤ 32 字符，整体 JSON ≤ 8KB |
+E1 实际协议以 **§6.8** 为准：`skill_share_update` / `skill_share_state` /
+`skill_share_off` / `skill_share_removed`、固定槽位 0/1/2、服务端 `ready_at`
+折算、`room_joined.skill_states`、`GET /rooms/{room_id_or_code}/skills` 与 30
+分钟 stale 过滤。
 
-载荷：
-
-```json
-{
-  "type": "skill_report",
-  "ts": 1750000000123,
-  "skills": [
-    {"id": "skill-a", "name": "闪现", "ready_at": 1750000008000, "total": 1200},
-    {"id": "skill-b", "name": "传送", "ready_at": null, "total": 300}
-  ]
-}
-```
-
-字段说明：
-
-| 字段 | 类型 | 含义 |
-|---|---|---|
-| `id` | string | 技能稳定标识（客户端本地表） |
-| `name` | string | 展示名（服务端原样广播，不做业务解释） |
-| `ready_at` | int64/null | 预计可用时间（Unix ms）；`null` 表示未知/不可用 |
-| `total` | int | 总量或累计值（具体语义由客户端定义，服务端只透传） |
-| `ts` | int64 | 本次快照时间（Unix ms） |
-
----
+早期草案中的 `skill_report` / `ready_at-total` 字段已不再作为契约；E2 运营干员
+配置中心见 §3.2 的 `GET /api/v1/config/operators` 与 §7.3 的
+`CONFIG_UNAVAILABLE`。E3/E4 暂缓。
 
 ## 9. 里程碑与协议演进
 
 | 里程碑 | 内容 | 协议变更 |
 |---|---|---|
-| **A**（当前） | 稳定性修复（`/list` 路由、WS 绑定、后台任务去重、SQL 日志初始化幂等）+ 本契约 | 无新接口；确定目标契约 |
-| **B** | JWT（HS256）+ 房间模型 | `/api/v1`、`auth/login`、房间 CRUD/密码、WS `auth/join_room` |
-| **C** | 聊天 | `chat_send` / `chat_message` / 历史接口 |
-| **D** | 画板 | `canvas_op` / `canvas_snapshot` / 底图字段 |
-| **E** | 技能共享 | `skill_report` / `skill_state` / `GET skills` |
+| **A** | 稳定性修复（`/list` 路由、WS 绑定、后台任务去重、SQL 日志初始化幂等） | 无新接口；确定目标契约 |
+| **B1/B2** | JWT + 房间模型 + WS 单端口 | `/api/v1`、`auth/*`、房间 CRUD/密码、WS `auth/join_room` |
+| **C** | 聊天 | `chat_send` / `chat_message` / 历史接口（窗口 7/30 天） |
+| **D** | 画板 | `canvas_op` / `canvas_snapshot_save` / `room_joined.canvas_snapshot` / `GET canvas` |
+| **E1** | 技能 CD 共享 | `skill_share_update/off/state/removed`、`room_joined.skill_states`、`GET skills` |
+| **E2** | 干员配置中心 | `GET /api/v1/config/operators`（ETag/304/503） |
+| **F** | 用户资料 / 房间软删 / 历史窗口 | nickname、PATCH/DELETE 房间、`window_days/truncated` |
+| **H1–H3** | 我的房间 / 密码上限 / 踢人通知 | `/rooms/mine`、`room_kicked`、长度规则 |
+| **E3/E4** | 后续技能/客户端增强 | 暂缓/未排期 |
 
 ---
 
@@ -730,7 +724,7 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | Q4 | 房主离开/转让/踢人/关闭房间的细则；清空画板权限 | 房主需先关闭；房间成员均可发 `clear` / 保存快照 | B/D 权限模型 |
 | Q5 | 画板 undo 语义、op 保留深度、是否落库 | **已定：D 不做 undo**；内存累计最多 5000 笔，仅显式 `canvas_snapshot_save` + 关房 flush 落库 | D 的实现与内存占用 |
 | Q6 | 聊天历史保留策略（内存/DB、条数/天数、分页游标） | MySQL 保留 30 天，游标分页 | C 的存储与合规 |
-| Q7 | 技能 `ready_at`/`total` 的精确定义；技能列表是否固定 | 由客户端定义、服务端透传；列表固定 | E 的展示一致性 |
+| Q7 | 技能 `ready_at` 的时钟语义；槽位/字段规则 | **已定：服务端权威折算 ready_at（服务器毫秒）；槽位固定 0/1/2** | 客户端倒计时一致性 |
 | Q8 | 限频具体阈值（HTTP 登录、WS 聊天、画板、技能） | 登录 5 次/分/IP；聊天 5 条/秒/人；画板 30 op/秒/人；技能 2 次/秒/人 | 防滥用与体验 |
 | Q9 | 底图的存储/分发（CDN、URL 是否鉴权、谁选择底图） | 运营预置 + CDN 公共读；房主从预置中选 | D 的部署与版权 |
 | Q10 | 单用户多端策略（同账号多 WS 连接/互踢） | 允许 1 个 WS，重连顶掉旧连接 | B 的会话管理 |
@@ -741,13 +735,15 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 
 ## 12. 与当前代码的差异清单（实现者必读）
 
-| 契约项 | 当前 HEAD（A） | 目标 |
-|---|---|---|
-| 认证 | 无 HTTP 鉴权；WS 仅校验用户名是否在内存在线表 | JWT（B） |
-| 响应包 | 房间裸 JSON/`error_code`；用户 `code/message/data`；全局 500 `code/request_id` | 统一 `{code,message,data,request_id?}`（B/C 迁移） |
-| 房间 | 内存 `ROOM_MANAGER`、无名称/密码/落库；5 位码 `[A-Z0-9]` | 落库房间模型 + 私有密码（B） |
-| WS 监听 | FastAPI `/ws` 与 HTTP 共用 8000；旧 8765 默认关闭（`LEGACY_WS_ENABLED=false`） | 同左 + 反代/TLS |
-| WS 消息 | `authenticate/join_room/leave_room/room_message/echo/broadcast/ping/activity` | `auth/join_room/leave_room/chat_send/canvas_op/skill_report/ping` |
-| 画板 | 无 | D 阶段实现 |
-| 技能 | 无 | E 阶段实现 |
-| 签名/限频 | 无 | B/E 逐步引入 |
+| 契约项 | 当前实现（master@3b40a84） |
+|---|---|
+| 认证 | JWT HS256 7 天；HTTP Bearer；WS 首消息 `auth`；单用户单连接 |
+| 响应包 | v1 统一 `{code,message,data,request_id?}`；业务 error_code 在 `data` |
+| 房间 | MySQL 落库；5 位 `[A-Z0-9]`；公共/私有/密码；软删除；8 人上限 |
+| WS 监听 | FastAPI `/ws` 与 HTTP 共用 8000；旧 8765 默认关闭 |
+| WS 消息 | `auth/join_room/leave_room/chat_send/canvas_op/canvas_snapshot_save/skill_share_update/skill_share_off/ping` |
+| 画板 | D 已实现（增量/快照/合并/关房 flush） |
+| 技能 | E1 已实现（服务端 ready_at、room_joined.skill_states、30 分钟 stale） |
+| 配置中心 | E2 已实现（公开、ETag/304、空配置 503） |
+| 限频 | 登录 5/分/IP、配置 60/分/IP、聊天 5/秒/人、画板 30/秒/人、技能 2/秒/人 |
+| 旧接口 | `/api/room/*`、`/api/users/*` 过渡保留，无 JWT |
