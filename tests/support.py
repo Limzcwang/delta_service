@@ -117,6 +117,7 @@ def install_tortoise_stub():
     for field_name in (
         "IntField",
         "SmallIntField",
+        "TinyIntField",
         "CharField",
         "DatetimeField",
         "BooleanField",

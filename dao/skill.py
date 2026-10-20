@@ -7,6 +7,12 @@ from typing import List, Optional
 from tortoise import fields, models
 
 
+class TinyIntField(fields.SmallIntField):
+    """MySQL TINYINT；Tortoise 无内置 TinyInt 字段。"""
+
+    SQL_TYPE = "TINYINT"
+
+
 class RoomSkillState(models.Model):
     """每房间每用户最新一份技能/大招/投掷物共享状态（不存历史）。"""
 
@@ -15,7 +21,7 @@ class RoomSkillState(models.Model):
     user = fields.ForeignKeyField("models.User", related_name="skill_states")
     data = fields.JSONField()
     # 队伍编号（1/2/3，允许重复；旧客户端可能为 NULL）
-    squad_number = fields.SmallIntField(null=True)
+    squad_number = TinyIntField(null=True)
     updated_at = fields.DatetimeField(auto_now=True)
 
     class Meta:
