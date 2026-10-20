@@ -208,6 +208,10 @@ class RoomJoinedSkillStatesTests(WsSkillTestCase):
         carol_ws = FakeWebSocket()
         carol_session = make_session(self.manager, carol, carol_ws)
         states = [state_payload("1", "Alice"), state_payload("2", "Bob")]
+        members = [
+            {"id": "1", "nickname": "Alice"},
+            {"id": "2", "nickname": "Bob"},
+        ]
         with mock.patch.object(
             manager_module.skills_service,
             "list_states",
@@ -215,7 +219,7 @@ class RoomJoinedSkillStatesTests(WsSkillTestCase):
         ), mock.patch.object(
             manager_module.rooms_service,
             "get_room_for_member",
-            new=mock.AsyncMock(return_value=(self.room, [])),
+            new=mock.AsyncMock(return_value=(self.room, members)),
         ):
             await self._send(
                 carol_session,
@@ -224,6 +228,28 @@ class RoomJoinedSkillStatesTests(WsSkillTestCase):
 
         event = carol_ws.messages("room_joined")[0]
         self.assertEqual(states, event["skill_states"])
+
+    async def test_room_joined_filters_users_no_longer_members(self):
+        carol = make_user(3, "carol", "Carol")
+        carol_ws = FakeWebSocket()
+        carol_session = make_session(self.manager, carol, carol_ws)
+        states = [state_payload("1", "Alice"), state_payload("2", "Bob")]
+        members = [{"id": "2", "nickname": "Bob"}]
+        with mock.patch.object(
+            manager_module.skills_service,
+            "list_states",
+            new=mock.AsyncMock(return_value=states),
+        ), mock.patch.object(
+            manager_module.rooms_service,
+            "get_room_for_member",
+            new=mock.AsyncMock(return_value=(self.room, members)),
+        ):
+            await self._send(
+                carol_session,
+                {"type": "join_room", "room_id_or_code": self.room.code},
+            )
+        event = carol_ws.messages("room_joined")[0]
+        self.assertEqual(["2"], [item["user_id"] for item in event["skill_states"]])
 
 
 class SkillsApiTests(unittest.IsolatedAsyncioTestCase):
@@ -236,7 +262,9 @@ class SkillsApiTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             v1_rooms.rooms_service,
             "get_room_for_member",
-            new=mock.AsyncMock(return_value=(self.room, [])),
+            new=mock.AsyncMock(
+                return_value=(self.room, [{"id": "1", "nickname": "Alice"}])
+            ),
         ), mock.patch.object(
             v1_rooms.skills_service,
             "list_states",
@@ -246,6 +274,39 @@ class SkillsApiTests(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(), self.room.code, self.user
             )
         self.assertEqual({"items": states}, response["data"])
+
+    async def test_get_skills_filters_users_no_longer_members(self):
+        states = [state_payload("1", "Alice"), state_payload("2", "Bob")]
+        members = [{"id": "2", "nickname": "Bob"}]
+        with mock.patch.object(
+            v1_rooms.rooms_service,
+            "get_room_for_member",
+            new=mock.AsyncMock(return_value=(self.room, members)),
+        ), mock.patch.object(
+            v1_rooms.skills_service,
+            "list_states",
+            new=mock.AsyncMock(return_value=states),
+        ):
+            response = await v1_rooms.get_room_skills(
+                SimpleNamespace(), self.room.code, self.user
+            )
+        items = response["data"]["items"]
+        self.assertEqual(["2"], [item["user_id"] for item in items])
+
+    async def test_get_skills_empty_after_filter(self):
+        with mock.patch.object(
+            v1_rooms.rooms_service,
+            "get_room_for_member",
+            new=mock.AsyncMock(return_value=(self.room, [])),
+        ), mock.patch.object(
+            v1_rooms.skills_service,
+            "list_states",
+            new=mock.AsyncMock(return_value=[state_payload("1", "Alice")]),
+        ):
+            response = await v1_rooms.get_room_skills(
+                SimpleNamespace(), self.room.code, self.user
+            )
+        self.assertEqual({"items": []}, response["data"])
 
     async def test_get_skills_non_member_403(self):
         with mock.patch.object(

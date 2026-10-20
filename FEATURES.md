@@ -1,6 +1,6 @@
 # 功能清单与里程碑状态（FEATURES）
 
-> 基线：`master@3b40a84`（含 B/C/D/E1、F、H1–H3、HTTPS 与配置中心）。测试：418 个 stdlib unittest 全离线通过。文档与代码冲突时以代码 / [PROTOCOL.md](PROTOCOL.md) 为准。
+> 基线：`master@3b40a84`（含 B/C/D/E1、F、H1–H3、HTTPS 与配置中心）。测试：422 个 stdlib unittest 全离线通过。文档与代码冲突时以代码 / [PROTOCOL.md](PROTOCOL.md) 为准。
 
 ## 1. 里程碑总览
 
@@ -92,6 +92,7 @@
 | 服务端折算 | ✅ | `adjusted=max(0, remaining-(now-captured_at))`；`ready_at=now+adjusted`；未来不放大、>10s 归零、负值归零 |
 | 广播/下发 | ✅ | `skill_share_state`（含自己）；`room_joined.skill_states`；`GET /rooms/{id}/skills`；`skill_share_off`→`skill_share_removed` |
 | stale | ✅ | `updated_at` >30 分钟视为未共享，GET/room_joined 直接过滤 |
+| 成员过滤 | ✅ | GET/room_joined 只返回当前房间成员的状态，HTTP 离开/崩溃残留行过滤，空列表正常返回 |
 | 清理 | ✅ | 关房/软删清整房；leave/kick 无 WS 连接也 DB 删除；断线保留 |
 
 ## 7. 配置中心（E2）
@@ -116,7 +117,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 单元测试 | ✅ 418 个 stdlib unittest，全离线（stub FastAPI/Tortoise/PyJWT/websockets） |
+| 单元测试 | ✅ 422 个 stdlib unittest，全离线（stub FastAPI/Tortoise/PyJWT/websockets） |
 | 真实 DB 集成 | 手工/QA 探针（sqlite/MySQL），不在 unittest 套件 |
 | 代码扫描 | gitleaks / pre-commit 配置存在；CI 尚未自动跑单测 |
 | 已知限制 | 单进程内存态（在线/画板/技能/限频）、无自动画板快照、无 refresh token、WS 画板 rev 连接级、备份未自动化 |

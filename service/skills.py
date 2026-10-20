@@ -201,6 +201,14 @@ async def list_states(room_id: str, now: Optional[datetime] = None) -> List[Dict
     return [state_to_dict(record) for record in records if not is_stale(record, now)]
 
 
+def filter_states_by_members(
+    states: List[Dict[str, Any]], member_ids: Any
+) -> List[Dict[str, Any]]:
+    """只保留当前仍在房间成员列表里的用户状态（过滤残留行）。"""
+    allowed = {str(member_id) for member_id in (member_ids or [])}
+    return [state for state in states if str(state.get("user_id")) in allowed]
+
+
 async def remove_state(room_id: str, user_id: int) -> int:
     return await SkillStateDao.remove(str(room_id), int(user_id))
 
