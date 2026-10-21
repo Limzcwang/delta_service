@@ -174,6 +174,25 @@ done
 > 若 Caddy 与容器不在同一 docker 网络/网段，按实际网关 IP 调整
 > `FORWARDED_ALLOW_IPS`（可用 `docker network inspect bridge` 查看 Gateway）。
 
+### 2.7 数据库自动迁移与关键列自检
+
+**新增字段必须同时改两处**：模型/DAO、`scripts/migrate_f.py`（幂等 ALTER），并把列加入
+`service/startup_migration.py` 的 `REQUIRED_COLUMNS`，否则启动自检会报 ERROR。
+
+- 服务启动（`main.init_services`）默认自动执行 `scripts/migrate_f.py`：
+  `AUTO_MIGRATE_ON_STARTUP=true`（默认）。迁移失败只记录 ERROR、**不阻断服务启动**，
+  随后关键列自检会把缺失列打印为 ERROR；可设 `AUTO_MIGRATE_ON_STARTUP=false` 关闭
+  自动迁移（仍保留自检）。
+- CI 在容器健康检查通过后再显式执行一次
+  `docker exec delta-service-container python scripts/migrate_f.py` 并打印 stats；
+  失败输出 GitHub `::warning`，不把部署 job 标记失败，但会提示手动处理。
+- 手动兜底同样在容器启动后执行迁移（见 §4）。
+- 启动日志关键字：`启动数据库迁移完成: {...}`、`数据库关键列自检通过`；
+  缺列时：`数据库关键列缺失（可能未执行迁移）: ...`。
+
+> 本次 `room_skill_states.squad_number` 缺列事故的根因就是「代码先上线、迁移未执行」；
+> 部署自动迁移 + 启动自检 + CI 显式迁移三层兜底。
+
 ## 3. 部署流程（从 push 到上线）
 
 1. 开发者合并 PR 到 `master`；
@@ -218,7 +237,7 @@ docker run --rm --env-file /etc/delta-service/db.env delta-service python script
 
 注意事项：
 
-- **迁移脚本必须执行**：`generate_schemas` 不会给已有表补列（F 起新增 `users.nickname`、`rooms.deleted`）；脚本幂等，空库（应用已建表）或已迁移库重复执行均安全；
+- **迁移脚本必须执行**：`generate_schemas` 不会给已有表补列（如 `users.nickname`、`rooms.deleted`、`room_skill_states.squad_number`）；脚本幂等，空库/已迁移库重复执行均安全；应用启动默认自动迁移（`AUTO_MIGRATE_ON_STARTUP=true`），CI 部署后也会显式跑一次；
 - 手动部署后，下一次 push 触发的 CI 会再次覆盖容器；手动操作只作为临时兜底，事后再查 runner/CI 问题；
 - 手动构建时同样会覆盖 `delta-service:latest`，回滚信息见第 5 节；
 - 任何情况下都不要把 `DB_PASSWORD` 直接写在命令行（会进 shell history/进程列表），统一用 `--env-file`。

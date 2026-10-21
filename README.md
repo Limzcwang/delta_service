@@ -74,6 +74,7 @@ Desktop Client ──HTTPS 8443──▶ Caddy ──HTTP 127.0.0.1:8000──�
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | ✅ | – | 使用最小权限账号；`DB_CHARSET` 默认 `utf8mb4` |
 | `JWT_SECRET` | ✅（认证） | – | ≥32 字节随机字符串；生产必须 ≥32 |
 | `JWT_EXPIRE_DAYS` | ❌ | `7` | access token 有效期 |
+| `AUTO_MIGRATE_ON_STARTUP` | ❌ | `true` | 启动自动执行 `scripts/migrate_f.py`（失败只告警不阻断）；关键列仍会自检 |
 | `FORWARDED_ALLOW_IPS` | 生产✅ | `127.0.0.1` | 信任的反代 IP；Caddy 场景 `172.17.0.1` |
 | `LEGACY_WS_ENABLED` | ❌ | `false` | 旧 8765 WS/后台任务开关（默认关闭） |
 | `WS_HOST` / `WS_PORT` | ❌ | `0.0.0.0` / `8765` | 仅 legacy server |
@@ -101,7 +102,7 @@ python main.py
 # HTTP: http://localhost:8000/docs   WS: ws://localhost:8000/ws
 ```
 
-首次启动会自动建缺失表；**已有库升级必须执行迁移脚本**（`generate_schemas` 不会补列）：
+首次启动会自动建缺失表；**已有库升级的列迁移会在启动时自动执行**（默认 `AUTO_MIGRATE_ON_STARTUP=true`，失败只记 ERROR 不阻断，并做关键列自检；也可手动执行）：
 
 ```bash
 python scripts/migrate_f.py
@@ -114,7 +115,7 @@ python scripts/migrate_f.py
 python -m unittest discover -s tests -v
 ```
 
-测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 422 个用例。
+测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 430 个用例。
 
 ### Docker 本地运行
 
