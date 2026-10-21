@@ -9,6 +9,7 @@ from api.init import create_app
 from config.database import init_database, close_database
 from log.logger import GlobalLogger, log_exception, logger, resolve_request_id
 from log.sql_logger import init_sql_logging
+from service.startup_migration import run_startup_migrations
 from websocket import (
     websocket_manager
 )
@@ -100,6 +101,10 @@ async def init_services():
         # 初始化SQL日志记录
         await init_sql_logging()
         logger.info("SQL日志记录初始化完成")
+
+        # 关键列迁移/自检：失败只告警，不阻断启动（默认开启，可用
+        # AUTO_MIGRATE_ON_STARTUP=false 关闭迁移，仍保留自检）
+        await run_startup_migrations()
 
         logger.info("所有服务初始化完成")
     except Exception as e:

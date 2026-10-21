@@ -95,6 +95,18 @@ jobs:
             docker logs delta-service-container
             exit 1
           fi
+
+          # 每次部署显式跑一次幂等迁移并打印结果（容器启动时也会自动迁移/自检）。
+          # 迁移失败不阻断已启动服务，但 CI 必须告警，避免再次出现缺列故障。
+          echo "🗄️ 执行数据库迁移（幂等）..."
+          if migration_output=$(docker exec delta-service-container python scripts/migrate_f.py 2>&1); then
+            echo "$migration_output"
+          else
+            echo "$migration_output"
+            echo "::warning title=数据库迁移失败::请查看上方迁移日志；服务已启动但关键列可能缺失"
+            echo "⚠️ 迁移失败：服务已启动，但关键列可能缺失；请查看容器日志并手动执行 scripts/migrate_f.py"
+          fi
+
           echo "✅ 部署成功"
 
       - name: Notify deployment status
