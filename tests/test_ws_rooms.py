@@ -154,6 +154,57 @@ class LeaveAndDisconnectTests(WsRoomTestCase):
         self.assertNotIn(self.alice_ws, self.manager.connected_clients)
         self.assertIsNone(self.alice_session.room_id)
 
+    async def test_disconnect_cleanup_removes_skill_and_broadcasts_order(self):
+        self.alice_session.room_id = self.room.id
+        self.alice_session.room_code = self.room.code
+        with mock.patch.object(
+            manager_module.skills_service,
+            "remove_state",
+            new=mock.AsyncMock(return_value=1),
+        ) as remove_state:
+            await self.manager._cleanup_session(
+                self.alice_session, reason="disconnected"
+            )
+        remove_state.assert_awaited_once_with(self.room.id, 1)
+        types = [message["type"] for message in self.bob_ws.sent]
+        self.assertLess(
+            types.index("skill_share_removed"), types.index("user_left")
+        )
+        self.assertEqual(
+            "1", self.bob_ws.messages("skill_share_removed")[0]["user_id"]
+        )
+
+    async def test_cleanup_refresh_user_exception_still_cleans_maps(self):
+        self.alice_session.room_id = self.room.id
+        self.alice_session.room_code = self.room.code
+        with mock.patch.object(
+            self.manager, "_refresh_user", new=mock.AsyncMock(side_effect=RuntimeError("boom"))
+        ), mock.patch.object(
+            manager_module.skills_service,
+            "remove_state",
+            new=mock.AsyncMock(return_value=1),
+        ):
+            await self.manager._cleanup_session(self.alice_session)
+        self.assertNotIn("1", self.manager.sessions)
+        self.assertNotIn(self.alice_ws, self.manager.connected_clients)
+        self.assertIsNone(self.alice_session.room_id)
+
+    async def test_cleanup_broadcast_exception_still_cleans_maps(self):
+        self.alice_session.room_id = self.room.id
+        with mock.patch.object(
+            self.manager,
+            "broadcast_to_room",
+            new=mock.AsyncMock(side_effect=RuntimeError("broadcast down")),
+        ), mock.patch.object(
+            manager_module.skills_service,
+            "remove_state",
+            new=mock.AsyncMock(return_value=1),
+        ):
+            await self.manager._cleanup_session(self.alice_session)
+        self.assertNotIn("1", self.manager.sessions)
+        self.assertNotIn(self.alice_ws, self.manager.connected_clients)
+        self.assertIsNone(self.alice_session.room_id)
+
     async def test_cleanup_is_idempotent(self):
         self.alice_session.room_id = self.room.id
         await self.manager._cleanup_session(self.alice_session)

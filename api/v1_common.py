@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from log.logger import resolve_request_id
+from log.logger import logger, resolve_request_id
 
 # 业务码（与 HTTP 状态码分离，见 PROTOCOL §7.1）
 CODE_OK = 200
@@ -74,6 +74,19 @@ def error_body(
 
 async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
     """FastAPI 异常处理器：APIError → v1 统一错误包。"""
+    headers = getattr(request, "headers", {}) or {}
+    account_user_id = getattr(
+        getattr(request, "state", None), "account_user_id", None
+    ) or "anonymous"
+    client_diag_id = headers.get("X-Diag-Id") or headers.get("x-diag-id") or "-"
+    logger.warning(
+        "API错误 code=%s error_code=%s path=%s account_user_id=%s client_diag_id=%s",
+        exc.code,
+        exc.error_code or "-",
+        getattr(getattr(request, "url", None), "path", "-"),
+        account_user_id,
+        client_diag_id,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content=error_body(

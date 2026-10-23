@@ -63,6 +63,7 @@ def state_payload(user_id="1", nickname="Alice"):
         "operator_name": "干员",
         "skills": skills,
         "captured_at": 1792400000000,
+        "match_state": "running",
         "server_received_at": 1792400000002,
         "squad_number": 1,
         "updated_at": 1792400000001,
@@ -123,6 +124,7 @@ class SkillUpdateTests(WsSkillTestCase):
             self.assertEqual("op-1", event["operator_id"])
             self.assertEqual(3, len(event["skills"]))
             self.assertEqual(1792400000000, event["captured_at"])
+            self.assertEqual("running", event["match_state"])
             self.assertEqual(1792400000002, event["server_received_at"])
             self.assertEqual(1, event["squad_number"])
             self.assertEqual(1792400000001, event["updated_at"])

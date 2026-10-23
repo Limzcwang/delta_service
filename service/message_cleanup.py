@@ -1,4 +1,4 @@
-"""聊天消息保留期清理任务（默认 30 天，应用 lifespan 周期执行）。
+"""聊天消息/画板/诊断保留期清理任务（应用 lifespan 周期执行）。
 
 不依赖 legacy 8765 WS 开关：由 FastAPI 应用 startup/shutdown 事件启动/停止。
 间隔 ``MESSAGE_CLEANUP_INTERVAL_HOURS``（默认 24 小时）；启动后先跑一次。
@@ -13,6 +13,7 @@ from typing import Awaitable, Callable, Optional
 
 from log.logger import log_exception, logger
 from service import canvas as canvas_service
+from service import diagnostics as diagnostics_service
 from service import messages as messages_service
 
 DEFAULT_INTERVAL_HOURS = 24.0
@@ -45,6 +46,7 @@ class MessageCleanupTask:
         interval_hours: Optional[float] = None,
         cleanup: Optional[Callable[[], Awaitable[int]]] = None,
         canvas_cleanup: Optional[Callable[[], Awaitable[int]]] = None,
+        diagnostics_cleanup: Optional[Callable[[], Awaitable[int]]] = None,
         sleep: Optional[Callable[[float], Awaitable[None]]] = None,
         clock: Optional[Callable[[], float]] = None,
     ):
@@ -54,6 +56,7 @@ class MessageCleanupTask:
         self._cleanups = [
             ("messages", cleanup or messages_service.cleanup_old_messages),
             ("canvas", canvas_cleanup or canvas_service.cleanup_canvas_snapshots),
+            ("diagnostics", diagnostics_cleanup or diagnostics_service.cleanup_old_events),
         ]
         self._sleep = sleep or asyncio.sleep
         self._clock = clock or time.monotonic
