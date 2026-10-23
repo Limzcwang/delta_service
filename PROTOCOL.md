@@ -254,7 +254,8 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 - 请求头：`X-Diag-Id: <client_diag_id>`（body 也带，二者不一致以 header 为准）。
 - Body（JSON，可选 gzip）：`{client_diag_id, session_id, client_version, events:[{kind:"env|tick|event", payload:{...}}]}`。
 - 限制：单次 body **≤512KB**（gzip 压缩后 ≤128KB）、每用户/诊断 ID **≤6 次/分**、events ≤1000。
-- 服务端按白名单保留字段并裁剪（字符串 256、数组 100、单 payload ≤64KB）；未知字段丢弃；非法 kind 计入 `skipped`。
+- 服务端按 **kind 白名单**（env/tick/event 各自固定字段）递归裁剪：字符串 ≤512、数组 ≤100、深度 ≤4、单 payload ≤64KB；未知字段丢弃；非法 kind 计入 `skipped`。
+- 敏感键递归丢弃（大小写不敏感）：`password/passwd/pwd/token/jwt/secret/api_key/authorization/cookie/session_key/private_key` 等；`settings` 仅保留 `auto_start/interval/interval_ms/overlay_enabled/sharing_enabled/capture_interval/hud_scale`，其余键丢弃。
 - 落库 `diagnostics_events`（account_user_id、client_diag_id、session_id、room_id、kind、payload JSON、client_version、created_at）；保留 **7 天**，由每日清理任务删除。
 - 响应：`{accepted, skipped}`；入库异常只记日志并返回 accepted=0，不影响主流程。
 - 错误码：`INVALID_DIAGNOSTICS_PAYLOAD`（400）、`DIAGNOSTICS_TOO_LARGE`（413）、`DIAGNOSTICS_RATE_LIMITED`（429）。

@@ -868,65 +868,80 @@ class WebSocketManager:
     async def _cleanup_session(
         self, session: ClientSession, reason: str = "disconnected"
     ) -> None:
-        """清理连接状态：退出房间频道、广播 user_left、移除映射（幂等）。"""
+        """清理连接状态；各步骤独立容错，session/映射/连接清理由 finally 保证。"""
         room_id = session.room_id
         room_code = session.room_code
-        user = await self._refresh_user(session)
+        user = getattr(session, "user", None)
 
-        if room_id is not None:
-            # B1：断开/顶号时清理技能状态并通知房间，再广播 user_left
-            user_id = getattr(user, "id", None) or session.user_id
-            if user_id is not None:
-                try:
-                    await skills_service.remove_state(room_id, user_id)
-                except Exception as exc:  # pragma: no cover - 防御性
-                    log_exception(
-                        exc, "断开连接清理技能状态失败", {"room": room_id}
+        try:
+            user = await self._refresh_user(session)
+        except Exception as exc:  # pragma: no cover - 防御性
+            log_exception(exc, "断开时刷新用户失败", {"room": room_id})
+
+        try:
+            if room_id is not None:
+                user_id = getattr(user, "id", None) or session.user_id
+                if user_id is not None:
+                    try:
+                        await skills_service.remove_state(room_id, user_id)
+                    except Exception as exc:
+                        log_exception(
+                            exc, "断开连接清理技能状态失败", {"room": room_id}
+                        )
+                    try:
+                        await self.broadcast_to_room(
+                            room_id,
+                            {
+                                "type": "skill_share_removed",
+                                "user_id": str(user_id),
+                            },
+                        )
+                    except Exception as exc:
+                        log_exception(
+                            exc, "断开连接广播技能移除失败", {"room": room_id}
+                        )
+                if user is not None:
+                    try:
+                        await self.broadcast_to_room(
+                            room_id,
+                            self._user_event(
+                                "user_left", room_id, room_code, user, reason=reason
+                            ),
+                            exclude_user_id=session.user_id,
+                        )
+                    except Exception as exc:
+                        log_exception(
+                            exc, "断开连接广播 user_left 失败", {"room": room_id}
+                        )
+        finally:
+            session.room_id = None
+            session.room_code = None
+            session.canvas_rev = None
+
+            if session.user_id is not None and self.sessions.get(session.user_id) is session:
+                self.sessions.pop(session.user_id, None)
+
+            username = getattr(user, "username", None) if user is not None else None
+            if username and self.user_websocket_map.get(username) is session.websocket:
+                self.user_websocket_map.pop(username, None)
+
+            self.connected_clients.discard(session.websocket)
+
+            try:
+                if user is not None:
+                    log_websocket_event(
+                        "disconnect",
+                        client_count=len(self.connected_clients),
+                        client_id=session.user_id,
+                        details=f"WebSocket连接断开({reason})",
                     )
-                try:
-                    await self.broadcast_to_room(
-                        room_id,
-                        {
-                            "type": "skill_share_removed",
-                            "user_id": str(user_id),
-                        },
-                    )
-                except Exception as exc:  # pragma: no cover - 防御性
-                    log_exception(
-                        exc, "断开连接广播技能移除失败", {"room": room_id}
-                    )
-            if user is not None:
-                await self.broadcast_to_room(
-                    room_id,
-                    self._user_event(
-                        "user_left", room_id, room_code, user, reason=reason
-                    ),
-                    exclude_user_id=session.user_id,
+                logger.info(
+                    "客户端断开，当前连接: %s, 用户: %s",
+                    len(self.connected_clients),
+                    username or "未认证",
                 )
-        session.room_id = None
-        session.room_code = None
-        session.canvas_rev = None
-
-        if session.user_id is not None and self.sessions.get(session.user_id) is session:
-            del self.sessions[session.user_id]
-
-        username = getattr(user, "username", None) if user is not None else None
-        if username and self.user_websocket_map.get(username) is session.websocket:
-            del self.user_websocket_map[username]
-
-        self.connected_clients.discard(session.websocket)
-        if user is not None:
-            log_websocket_event(
-                "disconnect",
-                client_count=len(self.connected_clients),
-                client_id=session.user_id,
-                details=f"WebSocket连接断开({reason})",
-            )
-        logger.info(
-            "客户端断开，当前连接: %s, 用户: %s",
-            len(self.connected_clients),
-            username or "未认证",
-        )
+            except Exception as exc:  # pragma: no cover - 日志失败不影响清理
+                log_exception(exc, "断开日志记录失败", {"room": room_id})
 
     # ------------------------------------------------------------------ 连接生命周期
     async def send_heartbeat(self, websocket: WebSocketServerProtocol) -> None:

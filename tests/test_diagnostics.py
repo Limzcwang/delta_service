@@ -69,15 +69,68 @@ class DiagnosticsValidationTests(unittest.TestCase):
                 {
                     "kind": "tick",
                     "payload": {
-                        "message": "x" * 1000,
-                        "lines": [{"text": "y" * 1000}] * 200,
+                        "phase": "x" * 1000,
+                        "start_ocr": {
+                            "lines": [{"text": "y" * 1000}] * 200
+                        },
                     },
                 }
             ]
         )
         _, events, _ = diagnostics_service.validate_batch(payload)
-        self.assertEqual(256, len(events[0]["payload"]["message"]))
-        self.assertEqual(100, len(events[0]["payload"]["lines"]))
+        self.assertEqual(512, len(events[0]["payload"]["phase"]))
+        self.assertEqual(100, len(events[0]["payload"]["start_ocr"]["lines"]))
+
+    def test_settings_sensitive_keys_and_unknown_dropped(self):
+        _, events, _ = diagnostics_service.validate_batch(
+            batch(
+                events=[
+                    {
+                        "kind": "event",
+                        "payload": {
+                            "settings": {
+                                "auto_start": True,
+                                "overlay_enabled": False,
+                                "password": "p@ss",
+                                "jwt": "xxx",
+                                "api_key": "k",
+                                "apiKey": "k2",
+                                "nested": {"secret": "s", "token": "t"},
+                                "unknown": 1,
+                                "interval": 800,
+                            }
+                        },
+                    }
+                ]
+            )
+        )
+        settings = events[0]["payload"]["settings"]
+        self.assertEqual(
+            {"auto_start": True, "overlay_enabled": False, "interval": 800},
+            settings,
+        )
+
+    def test_nested_sensitive_keys_removed(self):
+        _, events, _ = diagnostics_service.validate_batch(
+            batch(
+                events=[
+                    {
+                        "kind": "env",
+                        "payload": {
+                            "game_window": {
+                                "title": "Delta",
+                                "password": "x",
+                                "nested": {"jwt": "y", "ok": 1},
+                            }
+                        },
+                    }
+                ]
+            )
+        )
+        game = events[0]["payload"]["game_window"]
+        self.assertEqual({"title": "Delta"}, {k: v for k, v in game.items() if k in ("title",)})
+        self.assertNotIn("password", game)
+        self.assertNotIn("nested", game)
 
     def test_invalid_kind_skipped_and_empty_rejected(self):
         _, events, skipped = diagnostics_service.validate_batch(
@@ -120,6 +173,34 @@ class DiagnosticsApiTests(unittest.IsolatedAsyncioTestCase):
         args = self.save.await_args.args
         self.assertIsNone(args[2])
         self.assertNotIn("secret", json.dumps(args[1], ensure_ascii=False))
+
+    async def test_settings_secrets_not_passed_to_storage(self):
+        payload = batch(
+            events=[
+                {
+                    "kind": "event",
+                    "payload": {
+                        "settings": {
+                            "auto_start": True,
+                            "password": "p@ss",
+                            "jwt": "token",
+                            "api_key": "key",
+                            "nested": {"secret": "x"},
+                        },
+                        "password": "top-level",
+                    },
+                }
+            ]
+        )
+        response = await v1_diagnostics.upload_diagnostics(
+            FakeRequest(body=json.dumps(payload).encode()), user=None
+        )
+        self.assertEqual(3, response["data"]["accepted"])
+        saved = self.save.await_args.args
+        stored = json.dumps(saved[1], ensure_ascii=False)
+        self.assertIn("auto_start", stored)
+        for secret in ("p@ss", "token", "api_key", "secret", "top-level"):
+            self.assertNotIn(secret, stored)
 
     async def test_authenticated_has_account_id(self):
         request = FakeRequest(

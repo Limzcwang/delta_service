@@ -22,6 +22,8 @@ REQUIRED_COLUMNS = {
         "session_id",
         "kind",
         "payload",
+        "room_id",
+        "client_version",
         "created_at",
     ),
 }
