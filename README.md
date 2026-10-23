@@ -115,7 +115,7 @@ python scripts/migrate_f.py
 python -m unittest discover -s tests -v
 ```
 
-测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 452 个用例。
+测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 456 个用例。
 
 ### Docker 本地运行
 

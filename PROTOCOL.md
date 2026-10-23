@@ -578,7 +578,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
 ```
 
 - 已认证 + 已进房且仍是成员；`room_id` 必须与当前频道一致。
-- 校验：`skills` 恰好 3 条且 `slot` 为 0/1/2 不重复；`state` ∈ ready/charging/unknown；`remaining_ms` 0–600000；`max_charges` 1–9；`charges` 0–max_charges；`pct` 可选 0–100；`operator_id`/`operator_name` ≤32 字符；`captured_at` 非负毫秒。非法 → `INVALID_SKILL_PAYLOAD`。
+- 校验：`skills` 恰好 3 条且 `slot` 为 0/1/2 不重复；`state` ∈ ready/charging/unknown；`remaining_ms` 0–600000（`null` 归一化为 0）；`max_charges` 1–9；`charges` 0–max_charges；`pct` 可选 0–100；`operator_id`/`operator_name` 缺失或 `null` 归一化为空串，非字符串或 >32 才拒绝；`captured_at` 非负毫秒。非法 → `INVALID_SKILL_PAYLOAD`。
 - 可选 `squad_number`：队伍编号，只接受 **int 1/2/3**；其他值（0/4+/字符串/浮点/bool）**忽略该字段**，整条 payload 仍成功。**允许重复**，不做唯一/去重校验；省略或非法时按无编号处理。
 - 可选 `match_state`：`idle|running`（0.2.12 B5），缺省/非法归一化为 **idle**，不拒绝整条 payload；存入状态 JSON，随广播/room_joined/GET 下发。
 - 限频 **2 条/秒/用户**，超限 `RATE_LIMITED`（不落库、不广播）。

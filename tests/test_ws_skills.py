@@ -157,6 +157,21 @@ class SkillUpdateTests(WsSkillTestCase):
         self.assertEqual([], self.alice_ws.messages("error"))
         self.assertTrue(self.bob_ws.messages("skill_share_state"))
 
+    async def test_legacy_missing_operator_and_null_remaining_broadcast(self):
+        payload = skill_payload()
+        payload.pop("operator_id")
+        payload.pop("operator_name")
+        payload["skills"][0]["remaining_ms"] = None
+        payload["match_state"] = "running"
+        with mock.patch.object(
+            manager_module.skills_service,
+            "save_state",
+            new=mock.AsyncMock(return_value=state_payload()),
+        ) as save_state:
+            await self._send(self.alice_session, payload)
+        save_state.assert_awaited_once()
+        self.assertTrue(self.bob_ws.messages("skill_share_state"))
+
     async def test_rate_limit_two_per_second(self):
         with mock.patch.object(
             manager_module.skills_service,
