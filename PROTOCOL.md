@@ -244,6 +244,22 @@ B 阶段：新增接口一律使用目标格式；旧接口在过渡期保留原
 
 限频均为单进程内存滑动窗口，重启清零；多实例部署需外部共享限频。
 
+### 3.4 对局识别诊断上传（0.2.12 B6）
+
+内建诊断：客户端上报文本环境/过程/配置事件，用于排查识别问题；**不上传图像**。
+
+`POST /api/v1/diagnostics/batch`
+
+- 鉴权：JWT **可选**；登录后 `account_user_id` 落库/日志，未登录为匿名。
+- 请求头：`X-Diag-Id: <client_diag_id>`（body 也带，二者不一致以 header 为准）。
+- Body（JSON，可选 gzip）：`{client_diag_id, session_id, client_version, events:[{kind:"env|tick|event", payload:{...}}]}`。
+- 限制：单次 body **≤512KB**（gzip 压缩后 ≤128KB）、每用户/诊断 ID **≤6 次/分**、events ≤1000。
+- 服务端按白名单保留字段并裁剪（字符串 256、数组 100、单 payload ≤64KB）；未知字段丢弃；非法 kind 计入 `skipped`。
+- 落库 `diagnostics_events`（account_user_id、client_diag_id、session_id、room_id、kind、payload JSON、client_version、created_at）；保留 **7 天**，由每日清理任务删除。
+- 响应：`{accepted, skipped}`；入库异常只记日志并返回 accepted=0，不影响主流程。
+- 错误码：`INVALID_DIAGNOSTICS_PAYLOAD`（400）、`DIAGNOSTICS_TOO_LARGE`（413）、`DIAGNOSTICS_RATE_LIMITED`（429）。
+- 所有接口错误日志带 `account_user_id`（未登录 `anonymous`）与 `client_diag_id`（请求头带则记录）；返回文案不含内部 ID/堆栈。
+
 ## 4. 房间语义
 
 | 项 | 约定 |
@@ -556,12 +572,14 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
    {"slot":1,"state":"ready","remaining_ms":0,"charges":2,"max_charges":2},
    {"slot":2,"state":"unknown","remaining_ms":0,"charges":1,"max_charges":1}],
  "squad_number":2,
+ "match_state":"running",
  "captured_at":1750000000123}
 ```
 
 - 已认证 + 已进房且仍是成员；`room_id` 必须与当前频道一致。
 - 校验：`skills` 恰好 3 条且 `slot` 为 0/1/2 不重复；`state` ∈ ready/charging/unknown；`remaining_ms` 0–600000；`max_charges` 1–9；`charges` 0–max_charges；`pct` 可选 0–100；`operator_id`/`operator_name` ≤32 字符；`captured_at` 非负毫秒。非法 → `INVALID_SKILL_PAYLOAD`。
 - 可选 `squad_number`：队伍编号，只接受 **int 1/2/3**；其他值（0/4+/字符串/浮点/bool）**忽略该字段**，整条 payload 仍成功。**允许重复**，不做唯一/去重校验；省略或非法时按无编号处理。
+- 可选 `match_state`：`idle|running`（0.2.12 B5），缺省/非法归一化为 **idle**，不拒绝整条 payload；存入状态 JSON，随广播/room_joined/GET 下发。
 - 限频 **2 条/秒/用户**，超限 `RATE_LIMITED`（不落库、不广播）。
 
 **S→房间 `skill_share_state`**（所有房间连接，含发送者）：
@@ -572,6 +590,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
    {"slot":0,"state":"charging","remaining_ms":4500,"ready_at":1750000004500,"charges":0,"max_charges":1,"pct":30}
  ],
  "squad_number":2,
+ "match_state":"running",
  "captured_at":1750000000123,"server_received_at":1750000001623,"updated_at":1750000001700}
 ```
 
@@ -582,7 +601,7 @@ B2b 已落地 JWT 认证与房间频道，以下为**当前实际行为**，与�
   - 折算为负 → 0。
 - 下发的 `skills[].remaining_ms` 是**服务端收到时刻**的剩余量，`ready_at` 为绝对时刻；客户端渲染倒计时用 `ready_at - server_now`（不要再用 captured_at 自行折算）。
 - `captured_at` 原样保留用于审计；`server_received_at` 为本次服务端收到时间；二者均为毫秒。
-- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at`、`skills[].ready_at` 和可选 `squad_number`（None 时省略）；两者都只返回**当前成员**的状态，残留行（HTTP 离开未走 WS 清理等）会被过滤，空结果返回 `[]`。
+- 服务端只保留每 `(room_id,user_id)` 最新一份，不存历史。`room_joined.skill_states` 与 `GET /skills` 的每个状态同样包含 `server_received_at`、`skills[].ready_at`、可选 `squad_number`（None 时省略）与 `match_state`（idle/running）；两者都只返回**当前成员**的状态，残留行会被过滤，空结果返回 `[]`。
 
 **新成员**：`room_joined.skill_states` 为当前房间**仍在成员列表**的用户最新状态数组（结构同上，stale 已过滤；已离开/被踢的残留行不返回）。
 
@@ -671,6 +690,9 @@ WS 的 `error.code` 使用 **UPPER_SNAKE 字符串**（与 HTTP 数字码区分�
 | `INVALID_CANVAS_OP` | 400 | 40000 |
 | `INVALID_SKILL_PAYLOAD` | 400 | 40000 |
 | `CONFIG_UNAVAILABLE` | 503 | 50300 |
+| `INVALID_DIAGNOSTICS_PAYLOAD` | 400 | 40000 |
+| `DIAGNOSTICS_TOO_LARGE` | 413 | 41300 |
+| `DIAGNOSTICS_RATE_LIMITED` | 429 | 42900 |
 | `ROOM_FORBIDDEN` | 403 | 40300 |
 | `INVALID_USERNAME` / `INVALID_NICKNAME` / `WRONG_OLD_PASSWORD` / `INVALID_NEW_PASSWORD` | 400 | 40000 |
 | `ROOM_CODE_GENERATION_FAILED` | 500 | 50000 |
@@ -698,6 +720,7 @@ E1 实际协议以 **§6.8** 为准：`skill_share_update` / `skill_share_state`
 | **D** | 画板 | `canvas_op` / `canvas_snapshot_save` / `room_joined.canvas_snapshot` / `GET canvas` |
 | **E1** | 技能 CD 共享 | `skill_share_update/off/state/removed`、`room_joined.skill_states`、`GET skills` |
 | **E2** | 干员配置中心 | `GET /api/v1/config/operators`（ETag/304/503） |
+| **B5/B6** | 0.2.12 对局状态/诊断 | `match_state`；`POST /api/v1/diagnostics/batch` + `diagnostics_events`（7 天） |
 | **F** | 用户资料 / 房间软删 / 历史窗口 | nickname、PATCH/DELETE 房间、`window_days/truncated` |
 | **H1–H3** | 我的房间 / 密码上限 / 踢人通知 | `/rooms/mine`、`room_kicked`、长度规则 |
 | **E3/E4** | 后续技能/客户端增强 | 暂缓/未排期 |

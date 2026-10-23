@@ -177,7 +177,7 @@ done
 ### 2.7 数据库自动迁移与关键列自检
 
 **新增字段必须同时改两处**：模型/DAO、`scripts/migrate_f.py`（幂等 ALTER），并把列加入
-`service/startup_migration.py` 的 `REQUIRED_COLUMNS`，否则启动自检会报 ERROR。
+`service/startup_migration.py` 的 `REQUIRED_COLUMNS`，否则启动自检会报 ERROR。0.2.12 新增诊断表 `diagnostics_events`（DDL 在 `scripts/migrate_f.py`），已纳入启动迁移/自检。
 
 - 服务启动（`main.init_services`）默认自动执行 `scripts/migrate_f.py`：
   `AUTO_MIGRATE_ON_STARTUP=true`（默认）。迁移失败只记录 ERROR、**不阻断服务启动**，
@@ -192,6 +192,23 @@ done
 
 > 本次 `room_skill_states.squad_number` 缺列事故的根因就是「代码先上线、迁移未执行」；
 > 部署自动迁移 + 启动自检 + CI 显式迁移三层兜底。
+
+### 2.8 诊断数据（0.2.12 B6）
+
+- `POST /api/v1/diagnostics/batch` 落库 `diagnostics_events`（MySQL），单次 ≤512KB / gzip ≤128KB / 6 次每分，字段白名单裁剪；无管理页面，SQL 查询。
+- 保留 7 天；`MessageCleanupTask` 每日随消息/画板清理一并删除过期行，启动先跑一次。
+- 表由启动自动迁移创建（`scripts/migrate_f.py`），部署后确认日志 `diagnostics_table_created` 或自检通过。
+- 排查示例：
+
+```sql
+SELECT account_user_id, client_diag_id, kind, created_at
+FROM diagnostics_events
+WHERE created_at >= NOW() - INTERVAL 1 DAY
+ORDER BY id DESC LIMIT 50;
+
+SELECT * FROM diagnostics_events
+WHERE client_diag_id = '<uuid>' ORDER BY id DESC LIMIT 200;
+```
 
 ## 3. 部署流程（从 push 到上线）
 

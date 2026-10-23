@@ -16,6 +16,14 @@ REQUIRED_COLUMNS = {
     "users": ("nickname",),
     "rooms": ("deleted",),
     "room_skill_states": ("squad_number",),
+    "diagnostics_events": (
+        "account_user_id",
+        "client_diag_id",
+        "session_id",
+        "kind",
+        "payload",
+        "created_at",
+    ),
 }
 
 

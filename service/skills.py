@@ -14,6 +14,7 @@ SLOT_SKILL = 1
 SLOT_THROWABLE = 2
 VALID_SLOTS = (SLOT_ULTIMATE, SLOT_SKILL, SLOT_THROWABLE)
 VALID_STATES = ("ready", "charging", "unknown")
+VALID_MATCH_STATES = ("idle", "running")
 MAX_REMAINING_MS = 600000
 MAX_CHARGES = 9
 MAX_PERCENT = 100
@@ -49,6 +50,11 @@ def _normalize_squad_number(value: Any) -> Optional[int]:
         return value
     logger.debug("忽略非法 squad_number: %r", value)
     return None
+
+
+def _normalize_match_state(value: Any) -> str:
+    """对局状态只允许 idle/running；缺省/非法统一 idle，不拒绝 payload。"""
+    return value if value in VALID_MATCH_STATES else "idle"
 
 
 def validate_skill_payload(payload: Any) -> Dict[str, Any]:
@@ -116,6 +122,7 @@ def validate_skill_payload(payload: Any) -> Dict[str, Any]:
         "skills": normalized,
         "captured_at": captured_at,
         "squad_number": _normalize_squad_number(payload.get("squad_number")),
+        "match_state": _normalize_match_state(payload.get("match_state")),
     }
 
 
@@ -134,6 +141,7 @@ def state_to_dict(record) -> Dict[str, Any]:
         "operator_id": data.get("operator_id", ""),
         "operator_name": data.get("operator_name", ""),
         "skills": data.get("skills", []),
+        "match_state": data.get("match_state", "idle"),
         "captured_at": data.get("captured_at"),
         "server_received_at": data.get("server_received_at")
         if data.get("server_received_at") is not None

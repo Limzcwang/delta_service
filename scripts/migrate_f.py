@@ -39,6 +39,35 @@ def _table_exists(cursor, table: str) -> bool:
         return False
 
 
+DIAGNOSTICS_DDL = """
+CREATE TABLE IF NOT EXISTS diagnostics_events (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  account_user_id BIGINT NULL,
+  client_diag_id VARCHAR(36) NOT NULL,
+  session_id VARCHAR(36) NOT NULL,
+  room_id VARCHAR(64) NULL,
+  kind VARCHAR(16) NOT NULL,
+  payload JSON NOT NULL,
+  client_version VARCHAR(32) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_diag_user_time (account_user_id, created_at),
+  KEY idx_diag_id_time (client_diag_id, created_at),
+  KEY idx_diag_kind_time (kind, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+DIAGNOSTICS_COLUMNS = (
+    ("account_user_id", "BIGINT NULL"),
+    ("client_diag_id", "VARCHAR(36) NOT NULL"),
+    ("session_id", "VARCHAR(36) NOT NULL"),
+    ("room_id", "VARCHAR(64) NULL"),
+    ("kind", "VARCHAR(16) NOT NULL"),
+    ("payload", "JSON NOT NULL"),
+    ("client_version", "VARCHAR(32) NULL"),
+    ("created_at", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"),
+)
+
+
 def migrate(connection: Any) -> Dict[str, int]:
     """执行迁移；返回本次新增列/回填数量，便于日志与测试断言。
 
@@ -50,6 +79,8 @@ def migrate(connection: Any) -> Dict[str, int]:
         "nickname_backfilled": 0,
         "deleted_added": 0,
         "squad_number_added": 0,
+        "diagnostics_table_created": 0,
+        "diagnostics_columns_added": 0,
         "skipped_missing_tables": 0,
     }
     cursor = connection.cursor()
@@ -91,6 +122,19 @@ def migrate(connection: Any) -> Dict[str, int]:
                     "squad_number TINYINT NULL"
                 )
                 stats["squad_number_added"] = 1
+
+        # 0.2.12 B6：诊断事件表（新表用 IF NOT EXISTS；老表缺列补列）
+        if not _table_exists(cursor, "diagnostics_events"):
+            cursor.execute(DIAGNOSTICS_DDL)
+            stats["diagnostics_table_created"] = 1
+        else:
+            for column, definition in DIAGNOSTICS_COLUMNS:
+                if not _column_exists(cursor, "diagnostics_events", column):
+                    cursor.execute(
+                        f"ALTER TABLE diagnostics_events ADD COLUMN "
+                        f"{column} {definition}"
+                    )
+                    stats["diagnostics_columns_added"] += 1
 
         connection.commit()
     except Exception:

@@ -115,7 +115,7 @@ python scripts/migrate_f.py
 python -m unittest discover -s tests -v
 ```
 
-测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 430 个用例。
+测试全部离线（stdlib stub 替代 FastAPI/Tortoise/PyJWT/websockets），不连 MySQL；当前 447 个用例。
 
 ### Docker 本地运行
 
@@ -164,6 +164,11 @@ docker run --rm -p 8000:8000 --env-file ./db.env \
 - 版本 = `assets/operators.json` 内容 sha256 前 16 位；响应头 `ETag`/`Cache-Control: public, max-age=60`；`If-None-Match` 匹配 304。
 - 当前内置 **17 干员**；空/非法配置返回 **503 `CONFIG_UNAVAILABLE`**，绝不下发空列表。
 - 改配置后重启容器生效（不做热加载）。
+
+### 诊断上传（0.2.12 B6）
+- `POST /api/v1/diagnostics/batch`：JWT 可选；`X-Diag-Id`；JSON/gzip；≤512KB（gzip≤128KB）、6 次/分；字段白名单裁剪。
+- 落库 `diagnostics_events`，保留 7 天，随每日清理任务删除；不做管理页面，SQL 查询。
+- WS 断开/顶号：删除技能状态 → 广播 `skill_share_removed` → `user_left(reason=disconnected|replaced)`。
 
 ### 后台任务
 - 聊天消息 30 天清理 + 画板快照 7 天清理，`MessageCleanupTask` 随应用 lifespan 启动（默认 24h，启动先跑一次）。

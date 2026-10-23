@@ -873,12 +873,36 @@ class WebSocketManager:
         room_code = session.room_code
         user = await self._refresh_user(session)
 
-        if room_id is not None and user is not None:
-            await self.broadcast_to_room(
-                room_id,
-                self._user_event("user_left", room_id, room_code, user, reason=reason),
-                exclude_user_id=session.user_id,
-            )
+        if room_id is not None:
+            # B1：断开/顶号时清理技能状态并通知房间，再广播 user_left
+            user_id = getattr(user, "id", None) or session.user_id
+            if user_id is not None:
+                try:
+                    await skills_service.remove_state(room_id, user_id)
+                except Exception as exc:  # pragma: no cover - 防御性
+                    log_exception(
+                        exc, "断开连接清理技能状态失败", {"room": room_id}
+                    )
+                try:
+                    await self.broadcast_to_room(
+                        room_id,
+                        {
+                            "type": "skill_share_removed",
+                            "user_id": str(user_id),
+                        },
+                    )
+                except Exception as exc:  # pragma: no cover - 防御性
+                    log_exception(
+                        exc, "断开连接广播技能移除失败", {"room": room_id}
+                    )
+            if user is not None:
+                await self.broadcast_to_room(
+                    room_id,
+                    self._user_event(
+                        "user_left", room_id, room_code, user, reason=reason
+                    ),
+                    exclude_user_id=session.user_id,
+                )
         session.room_id = None
         session.room_code = None
         session.canvas_rev = None

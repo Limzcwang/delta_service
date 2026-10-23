@@ -63,4 +63,23 @@ async def get_current_user(request: Request):
     user = await UserDao.get_user_by_id(user_pk)
     if user is None:
         raise APIError(401, CODE_TOKEN_INVALID, "登录凭证无效")
+    try:
+        request.state.account_user_id = str(getattr(user, "id", ""))
+    except Exception:
+        pass
     return user
+
+
+async def get_optional_user(request: Request):
+    """诊断上报用：无 Authorization 时匿名；有则按普通用户校验。"""
+    headers = getattr(request, "headers", None)
+    authorization = None
+    if headers is not None:
+        authorization = headers.get("Authorization") or headers.get("authorization")
+    if not authorization:
+        try:
+            request.state.account_user_id = "anonymous"
+        except Exception:
+            pass
+        return None
+    return await get_current_user(request)

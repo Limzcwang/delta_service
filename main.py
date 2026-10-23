@@ -38,6 +38,15 @@ async def global_exception_handler(request: Request, exc: Exception):
             "path": request.url.path,
             "method": request.method,
             "client_ip": request.client.host if request.client else "unknown",
+            "account_user_id": getattr(
+                getattr(request, "state", None), "account_user_id", None
+            )
+            or "anonymous",
+            "client_diag_id": (
+                getattr(request, "headers", {}).get("X-Diag-Id")
+                or getattr(request, "headers", {}).get("x-diag-id")
+                or "-"
+            ),
         },
     )
 

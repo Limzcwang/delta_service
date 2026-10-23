@@ -71,6 +71,26 @@ class SkillValidationTests(unittest.TestCase):
         self.assertEqual(30, data["skills"][0]["pct"])
         self.assertNotIn("pct", data["skills"][1])
 
+    def test_match_state_valid_default_and_invalid(self):
+        self.assertEqual(
+            "running",
+            skills_service.validate_skill_payload(
+                make_payload(match_state="running")
+            )["match_state"],
+        )
+        self.assertEqual(
+            "idle",
+            skills_service.validate_skill_payload(make_payload())["match_state"],
+        )
+        for value in ("running2", "", None, 1):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    "idle",
+                    skills_service.validate_skill_payload(
+                        make_payload(match_state=value)
+                    )["match_state"],
+                )
+
     def test_squad_number_valid_values(self):
         for value in (1, 2, 3):
             with self.subTest(value=value):
@@ -198,6 +218,14 @@ class SkillStateServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Alice", state["nickname"])
         self.assertEqual(3, len(state["skills"]))
         self.assertEqual(int(NOW.timestamp() * 1000), state["updated_at"])
+
+    async def test_match_state_stored_and_serialized(self):
+        state = await skills_service.save_state(
+            self.room, self.user, make_payload(match_state="running")
+        )
+        self.assertEqual("running", state["match_state"])
+        listed = await skills_service.list_states("room-1", now=NOW)
+        self.assertEqual("running", listed[0]["match_state"])
 
     async def test_squad_number_stored_and_serialized(self):
         state = await skills_service.save_state(

@@ -7,6 +7,7 @@ from api.user import router as user_router
 from api.v1_auth import router as v1_router
 from api.v1_common import APIError, api_error_handler
 from api.v1_config import router as v1_config_router
+from api.v1_diagnostics import router as v1_diagnostics_router
 from api.v1_rooms import router as v1_rooms_router
 from api.ws import router as ws_router
 from config.database import DATABASE_CONFIG
@@ -59,6 +60,7 @@ def create_app():
     app.include_router(v1_router)
     app.include_router(v1_rooms_router)
     app.include_router(v1_config_router)
+    app.include_router(v1_diagnostics_router)
     # 单端口 WebSocket：ws://<host>:8000/ws
     app.include_router(ws_router)
 

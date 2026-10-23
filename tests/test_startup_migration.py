@@ -23,12 +23,17 @@ class SchemaCheckTests(unittest.TestCase):
             def cursor(self):
                 return Cursor()
 
-        with mock.patch.object(sm, "_table_exists", side_effect=[True, False, True]), mock.patch.object(
+        with mock.patch.object(sm, "_table_exists", side_effect=[True, False, True, False]), mock.patch.object(
             sm, "_column_exists", side_effect=[False, False]
         ):
             missing = sm.check_required_columns(Connection())
         self.assertEqual(
-            ["users.nickname", "rooms.*", "room_skill_states.squad_number"],
+            [
+                "users.nickname",
+                "rooms.*",
+                "room_skill_states.squad_number",
+                "diagnostics_events.*",
+            ],
             missing,
         )
 
