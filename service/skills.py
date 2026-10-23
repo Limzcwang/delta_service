@@ -63,6 +63,11 @@ def validate_skill_payload(payload: Any) -> Dict[str, Any]:
         _invalid("payload 必须是对象")
     operator_id = payload.get("operator_id")
     operator_name = payload.get("operator_name")
+    # 0.2.12 兼容：缺省/None 归一化为空串，只有非字符串或超长才拒绝
+    if operator_id is None:
+        operator_id = ""
+    if operator_name is None:
+        operator_name = ""
     if not isinstance(operator_id, str) or len(operator_id) > MAX_OPERATOR_LENGTH:
         _invalid("operator_id 必须是 ≤32 字符字符串")
     if not isinstance(operator_name, str) or len(operator_name) > MAX_OPERATOR_LENGTH:
@@ -86,6 +91,9 @@ def validate_skill_payload(payload: Any) -> Dict[str, Any]:
         if state not in VALID_STATES:
             _invalid("state 必须是 ready/charging/unknown")
         remaining_ms = item.get("remaining_ms")
+        # 0.2.12 兼容：None 归一化为 0（unknown 槽位前端可能发 null）
+        if remaining_ms is None:
+            remaining_ms = 0
         if not _is_int(remaining_ms) or not 0 <= remaining_ms <= MAX_REMAINING_MS:
             _invalid("remaining_ms 必须是 0-600000 整数")
         charges = item.get("charges")

@@ -117,6 +117,43 @@ class SkillValidationTests(unittest.TestCase):
             )["squad_number"]
         )
 
+    def test_missing_operator_and_null_remaining_accepted(self):
+        payload = make_payload()
+        payload.pop("operator_id")
+        payload.pop("operator_name")
+        payload["skills"][0]["remaining_ms"] = None
+        payload["skills"][1]["state"] = "unknown"
+        payload["skills"][1]["remaining_ms"] = None
+        data = skills_service.validate_skill_payload(payload)
+        self.assertEqual("", data["operator_id"])
+        self.assertEqual("", data["operator_name"])
+        self.assertEqual(0, data["skills"][0]["remaining_ms"])
+        self.assertEqual(0, data["skills"][1]["remaining_ms"])
+
+    def test_match_state_only_unknown_slots_accepted(self):
+        payload = {
+            "operator_id": "",
+            "operator_name": "",
+            "match_state": "running",
+            "skills": [
+                {"slot": 0, "state": "unknown", "remaining_ms": None, "charges": 0, "max_charges": 1},
+                {"slot": 1, "state": "unknown", "remaining_ms": None, "charges": 0, "max_charges": 2},
+                {"slot": 2, "state": "unknown", "remaining_ms": None, "charges": 0, "max_charges": 1},
+            ],
+            "captured_at": 1792400000000,
+        }
+        data = skills_service.validate_skill_payload(payload)
+        self.assertEqual("running", data["match_state"])
+        self.assertEqual([0, 0, 0], [item["remaining_ms"] for item in data["skills"]])
+
+    def test_operator_non_string_still_rejected(self):
+        for field in ("operator_id", "operator_name"):
+            payload = make_payload()
+            payload[field] = 123
+            with self.subTest(field=field):
+                with self.assertRaises(skills_service.SkillError):
+                    skills_service.validate_skill_payload(payload)
+
     def test_invalid_payloads(self):
         base = make_payload()
         bad_cases = []
