@@ -4,8 +4,8 @@
     "season": "S11「群星」",
     "season_start": "2026-09-04",
     "game_mode": "烽火地带（摸金）",
-    "generated_at": "2026-10-20",
-    "version_note": "S11 群星 + 2026-09-17 平衡补丁；S12「微光」2026-11-05 上线，届时需复核",
+    "generated_at": "2026-10-24",
+    "version_note": "S11 群英 + 用户实机 CD 表（2026-10-24，表值为单次充能 CD）",
     "slot_meaning": {
       "0": "大招(X)",
       "1": "战术技能(V)",
@@ -13,12 +13,7 @@
     },
     "total_cd_ms_note": "充能类技能为「单次充能所需毫秒」，配合 max_charges 使用；大招为大招充满 0→100% 的时间",
     "mode_note": "蝶/无名/旅人的大招在全面战场另有更短 CD（蝶120s、无名30s、旅人75s），本表统一取烽火地带口径",
-    "unknown_cd": [
-      "wuming:2 突破型闪光弹",
-      "muyangren:2 震撼手雷",
-      "bite:0 T仔追踪爆破",
-      "yinyi:0 蜂鸟间谍摄像头"
-    ],
+    "unknown_cd": [],
     "sources": [
       "https://wiki.biligame.com/deltaoperation2024/干员图鉴",
       "https://wiki.biligame.com/deltaoperation2024/<干员名>（action=raw 原始 wikitext，2026-10 版）",
@@ -28,7 +23,8 @@
     "roster_note": "共 17 名干员；液氮（S10「裂变」工程干员）在 BWIKI 图鉴中被注释隐藏，按干员页补入",
     "cd_filled_20261020": [
       "wululu:2 复合型燃烧弹 = 55000（3DM 2025-04 G键 55秒）"
-    ]
+    ],
+    "cd_table_source": "用户实机技能 CD 表（2026-10-24）。表值为**单次充能 CD**；多充能技能 total_cd_ms = 单次 CD × max_charges，charge_cd_ms = 单次 CD。槽位：0=大招(X) 1=技能(V) 2=道具(G)"
   },
   "operators": [
     {
@@ -39,20 +35,23 @@
         {
           "slot": 0,
           "name": "动力外骨骼",
-          "total_cd_ms": 90000,
-          "max_charges": 1
+          "total_cd_ms": 60000,
+          "max_charges": 1,
+          "charge_cd_ms": 60000
         },
         {
           "slot": 1,
           "name": "三联装手炮",
-          "total_cd_ms": 70000,
-          "max_charges": 2
+          "total_cd_ms": 140000,
+          "max_charges": 2,
+          "charge_cd_ms": 70000
         },
         {
           "slot": 2,
           "name": "突破型烟雾弹",
-          "total_cd_ms": 45000,
-          "max_charges": 2
+          "total_cd_ms": 80000,
+          "max_charges": 2,
+          "charge_cd_ms": 40000
         }
       ]
     },
@@ -65,19 +64,22 @@
           "slot": 0,
           "name": "虎蹲炮",
           "total_cd_ms": 70000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 70000
         },
         {
           "slot": 1,
           "name": "动力推进",
-          "total_cd_ms": 15000,
-          "max_charges": 1
+          "total_cd_ms": 20000,
+          "max_charges": 1,
+          "charge_cd_ms": 20000
         },
         {
           "slot": 2,
           "name": "磁吸炸弹",
-          "total_cd_ms": 55000,
-          "max_charges": 2
+          "total_cd_ms": 110000,
+          "max_charges": 2,
+          "charge_cd_ms": 55000
         }
       ]
     },
@@ -90,19 +92,22 @@
           "slot": 0,
           "name": "静默潜袭",
           "total_cd_ms": 90000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 90000
         },
         {
           "slot": 1,
           "name": "旋刃飞行器",
           "total_cd_ms": 50000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 50000
         },
         {
           "slot": 2,
           "name": "突破型闪光弹",
-          "total_cd_ms": null,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         }
       ]
     },
@@ -115,19 +120,22 @@
           "slot": 0,
           "name": "紧急回避装置",
           "total_cd_ms": 120000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 120000
         },
         {
           "slot": 1,
           "name": "战术翻滚",
           "total_cd_ms": 30000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 30000
         },
         {
           "slot": 2,
           "name": "钻墙电刺",
-          "total_cd_ms": 60000,
-          "max_charges": 2
+          "total_cd_ms": 110000,
+          "max_charges": 2,
+          "charge_cd_ms": 55000
         }
       ]
     },
@@ -139,20 +147,23 @@
         {
           "slot": 0,
           "name": "激素枪",
-          "total_cd_ms": 30000,
-          "max_charges": 6
+          "total_cd_ms": 240000,
+          "max_charges": 6,
+          "charge_cd_ms": 40000
         },
         {
           "slot": 1,
           "name": "烟幕",
           "total_cd_ms": 60000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 60000
         },
         {
           "slot": 2,
           "name": "蜂巢科技烟雾弹",
           "total_cd_ms": 40000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 40000
         }
       ]
     },
@@ -164,20 +175,23 @@
         {
           "slot": 0,
           "name": "流荧·集群系统",
-          "total_cd_ms": 120000,
-          "max_charges": 1
+          "total_cd_ms": 90000,
+          "max_charges": 1,
+          "charge_cd_ms": 90000
         },
         {
           "slot": 1,
           "name": "肾上腺素激活",
-          "total_cd_ms": 45000,
-          "max_charges": 1
+          "total_cd_ms": 60000,
+          "max_charges": 1,
+          "charge_cd_ms": 60000
         },
         {
           "slot": 2,
           "name": "致盲毒雾",
-          "total_cd_ms": 30000,
-          "max_charges": 2
+          "total_cd_ms": 100000,
+          "max_charges": 2,
+          "charge_cd_ms": 50000
         }
       ]
     },
@@ -189,20 +203,23 @@
         {
           "slot": 0,
           "name": "“蝶式”救援无人机",
-          "total_cd_ms": 90000,
-          "max_charges": 1
+          "total_cd_ms": 70000,
+          "max_charges": 1,
+          "charge_cd_ms": 70000
         },
         {
           "slot": 1,
           "name": "纳米医疗粉尘",
-          "total_cd_ms": 35000,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         },
         {
           "slot": 2,
           "name": "遥控烟雾",
-          "total_cd_ms": 40000,
-          "max_charges": 2
+          "total_cd_ms": 100000,
+          "max_charges": 2,
+          "charge_cd_ms": 50000
         }
       ]
     },
@@ -214,20 +231,23 @@
         {
           "slot": 0,
           "name": "军犬协同",
-          "total_cd_ms": 90000,
-          "max_charges": 1
+          "total_cd_ms": 120000,
+          "max_charges": 1,
+          "charge_cd_ms": 120000
         },
         {
           "slot": 1,
           "name": "气雾针剂枪",
-          "total_cd_ms": 40000,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         },
         {
           "slot": 2,
           "name": "刺激性烟雾",
-          "total_cd_ms": 45000,
-          "max_charges": 2
+          "total_cd_ms": 80000,
+          "max_charges": 2,
+          "charge_cd_ms": 40000
         }
       ]
     },
@@ -239,20 +259,23 @@
         {
           "slot": 0,
           "name": "声波震慑",
-          "total_cd_ms": 120000,
-          "max_charges": 1
+          "total_cd_ms": 90000,
+          "max_charges": 1,
+          "charge_cd_ms": 90000
         },
         {
           "slot": 1,
           "name": "声波陷阱",
           "total_cd_ms": 40000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 40000
         },
         {
           "slot": 2,
           "name": "震撼手雷",
-          "total_cd_ms": null,
-          "max_charges": 1
+          "total_cd_ms": 45000,
+          "max_charges": 1,
+          "charge_cd_ms": 45000
         }
       ]
     },
@@ -265,19 +288,22 @@
           "slot": 0,
           "name": "防爆套装",
           "total_cd_ms": 60000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 60000
         },
         {
           "slot": 1,
           "name": "多功能钩爪",
           "total_cd_ms": 30000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 30000
         },
         {
           "slot": 2,
           "name": "刀片刺网手雷",
           "total_cd_ms": 35000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 35000
         }
       ]
     },
@@ -289,20 +315,23 @@
         {
           "slot": 0,
           "name": "巡飞弹",
-          "total_cd_ms": 120000,
-          "max_charges": 1
+          "total_cd_ms": 90000,
+          "max_charges": 1,
+          "charge_cd_ms": 90000
         },
         {
           "slot": 1,
           "name": "速凝掩体",
           "total_cd_ms": 55000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 55000
         },
         {
           "slot": 2,
           "name": "复合型燃烧弹",
-          "total_cd_ms": 55000,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         }
       ]
     },
@@ -314,20 +343,23 @@
         {
           "slot": 0,
           "name": "T仔追踪爆破",
-          "total_cd_ms": null,
-          "max_charges": 1
+          "total_cd_ms": 120000,
+          "max_charges": 1,
+          "charge_cd_ms": 120000
         },
         {
           "slot": 1,
           "name": "哨兵母巢",
-          "total_cd_ms": 33000,
-          "max_charges": 1
+          "total_cd_ms": 35000,
+          "max_charges": 1,
+          "charge_cd_ms": 35000
         },
         {
           "slot": 2,
           "name": "烟雾陷阱",
-          "total_cd_ms": 40000,
-          "max_charges": 2
+          "total_cd_ms": 80000,
+          "max_charges": 2,
+          "charge_cd_ms": 40000
         }
       ]
     },
@@ -339,20 +371,23 @@
         {
           "slot": 0,
           "name": "连发冷凝榴弹",
-          "total_cd_ms": 110000,
-          "max_charges": 1
+          "total_cd_ms": 100000,
+          "max_charges": 1,
+          "charge_cd_ms": 100000
         },
         {
           "slot": 1,
           "name": "温感追踪震撼弹",
-          "total_cd_ms": 30000,
-          "max_charges": 2
+          "total_cd_ms": 110000,
+          "max_charges": 2,
+          "charge_cd_ms": 55000
         },
         {
           "slot": 2,
           "name": "杜瓦冷罐",
-          "total_cd_ms": 60000,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         }
       ]
     },
@@ -365,19 +400,22 @@
           "slot": 0,
           "name": "侦察箭矢",
           "total_cd_ms": 75000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 75000
         },
         {
           "slot": 1,
           "name": "电击箭矢",
-          "total_cd_ms": 40000,
-          "max_charges": 2
+          "total_cd_ms": 100000,
+          "max_charges": 2,
+          "charge_cd_ms": 50000
         },
         {
           "slot": 2,
           "name": "增强型破片手雷",
-          "total_cd_ms": 45000,
-          "max_charges": 2
+          "total_cd_ms": 110000,
+          "max_charges": 2,
+          "charge_cd_ms": 55000
         }
       ]
     },
@@ -389,20 +427,23 @@
         {
           "slot": 0,
           "name": "信号破译器",
-          "total_cd_ms": 90000,
-          "max_charges": 1
+          "total_cd_ms": 120000,
+          "max_charges": 1,
+          "charge_cd_ms": 120000
         },
         {
           "slot": 1,
           "name": "闪光巡飞器",
-          "total_cd_ms": 45000,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         },
         {
           "slot": 2,
           "name": "数据飞刀",
-          "total_cd_ms": 40000,
-          "max_charges": 2
+          "total_cd_ms": 80000,
+          "max_charges": 2,
+          "charge_cd_ms": 40000
         }
       ]
     },
@@ -414,20 +455,23 @@
         {
           "slot": 0,
           "name": "蜂鸟间谍摄像头",
-          "total_cd_ms": null,
-          "max_charges": 1
+          "total_cd_ms": 90000,
+          "max_charges": 1,
+          "charge_cd_ms": 90000
         },
         {
           "slot": 1,
           "name": "猎鹰无人机",
           "total_cd_ms": 65000,
-          "max_charges": 1
+          "max_charges": 1,
+          "charge_cd_ms": 65000
         },
         {
           "slot": 2,
           "name": "脉冲手雷",
-          "total_cd_ms": 55000,
-          "max_charges": 2
+          "total_cd_ms": 110000,
+          "max_charges": 2,
+          "charge_cd_ms": 55000
         }
       ]
     },
@@ -439,20 +483,23 @@
         {
           "slot": 0,
           "name": "声波探测器",
-          "total_cd_ms": 100000,
-          "max_charges": 1
+          "total_cd_ms": 120000,
+          "max_charges": 1,
+          "charge_cd_ms": 120000
         },
         {
           "slot": 1,
           "name": "复合闪光弹",
-          "total_cd_ms": 30000,
-          "max_charges": 2
+          "total_cd_ms": 80000,
+          "max_charges": 2,
+          "charge_cd_ms": 40000
         },
         {
           "slot": 2,
           "name": "震荡手雷",
-          "total_cd_ms": 30000,
-          "max_charges": 2
+          "total_cd_ms": 90000,
+          "max_charges": 2,
+          "charge_cd_ms": 45000
         }
       ]
     }
